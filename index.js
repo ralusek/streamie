@@ -56,6 +56,11 @@ class Streamie {
       handling: new Set()
     }
 
+    p(this).promises = {
+      completed: utils.promise.deferred(),
+      done: utils.promise.deferred()
+    };
+
     p(this).handler = config.handler || (item => item);
 
     p(this).emitter = new EventEmitter();
@@ -63,6 +68,8 @@ class Streamie {
     // Bootstrap state.
     p(this).state = {
       stopped: false,
+      completing: false,
+      completed: false,
       count: { 
         total: 0,
         batches: 0,
@@ -82,6 +89,9 @@ class Streamie {
    *
    */
   push(input) {
+    if (p(this).state.completing) throw new Error('Cannot push to streamie, already completing/completed');
+    if (p(this).state.stopped) throw new Error('Cannot push to streamie, already stopped.');
+
     p(this).stream.write(input);
     return this;
   }
@@ -97,6 +107,22 @@ class Streamie {
   /**
    *
    */
+  complete() {
+    if (!p(this).state.completing) {
+      p(this).state.completing = true;
+
+      // Defer execution to next tick prevent "write after end" error on stream.
+      setTimeout(() => p(this).stream.destroy());
+    }
+
+    _refresh(this);
+
+    return p(this).promises.completed.promise;
+  }
+
+  /**
+   *
+   */
   stop({propagate = true} = {}) {
     if (p(this).state.stopped) return this;
     p(this).state.stopped = true;
@@ -106,7 +132,16 @@ class Streamie {
     // Defer execution to next tick prevent "write after end" error on stream.
     setTimeout(() => p(this).stream.destroy());
 
+    p(this).promises.done.deferred.resolve();
+
     return this;
+  }
+
+  /**
+   *
+   */
+  isStopped() {
+    return p(this).state.stopped;
   }
 
   /**
@@ -134,21 +169,21 @@ class Streamie {
    *
    */
   map(handler, config = {}) {
-    return _childStream(this, Object.assign(config, {handler}));
+    return _childStreamie(this, Object.assign(config, {handler}));
   }
 
   /**
    *
    */
   filter(handler, config = {}) {
-    return _childStream(this, Object.assign(config, {handler, filterTest: test => !!test}));
+    return _childStreamie(this, Object.assign(config, {handler, filterTest: test => !!test}));
   }
 
   /**
    *
    */
   find(handler, config = {}) {
-    return _childStream(this, Object.assign(
+    return _childStreamie(this, Object.assign(
       config,
       {
         handler,
@@ -156,6 +191,14 @@ class Streamie {
         stopAfter: config.count || 1
       }
     ));
+  }
+
+  /**
+   *
+   */
+  then(...args) {
+    return p(this).promises.done.promise
+    .then(...args);
   }
 }
 
@@ -195,28 +238,47 @@ function _refresh(streamie) {
     return;
   }
 
-  // Ensure that an item has been backlogged in the stream.
-  if (!backlogged.length) return;
-
-  _handleNext(streamie);
+  // Ensure that an item has been backlogged in the stream, or that the streamie
+  // is in a completing state. If it is in a completing state, we proceed, as
+  // we might need to drain a batch that would never finish filling out.
+  if (backlogged.length) _handleNextBacklogged(streamie);
+  _handleCurrentBatch(streamie);
 }
 
 
 /**
  *
  */
-function _handleNext(streamie) {
+function _handleNextBacklogged(streamie) {
   const { advanced, backlogged, active } = p(streamie).queues;
-  const { handling } = p(streamie).sets;
-  const { batchSize } = p(streamie).config;
 
   const queueItem = Object.assign({}, advanced.shift(), backlogged.shift(), {activeAt: Date.now()});
 
   active.push(queueItem);
 
+  // _handleCurrentBatch(streamie);
 
-  // If not yet at batchSize, return and invoke streamCallback to allow next item.
-  if (active.length < batchSize) return queueItem.streamCallback();
+  queueItem.streamCallback();
+}
+
+
+/**
+ *
+ */
+function _handleCurrentBatch(streamie) {
+  const { advanced, backlogged, active } = p(streamie).queues;
+  const { handling } = p(streamie).sets;
+  const { batchSize } = p(streamie).config;
+  const { completing } = p(streamie).state;
+
+  const isFinalBatch = completing && !backlogged.length;
+
+  // Ensure that the active amount of queue items is at batchSize.
+  // The exception is if streamie is currently completing, and there is nothing
+  // else backlogged, in which case we handle the batch prematurely, as there
+  // will be no new items processed.
+  if ((active.length < batchSize) && !isFinalBatch) return; 
+
 
   // In case the batch size has changed to something smaller than what is currently
   // handled, we slice the batch out of the active array and leave the remaining
@@ -231,16 +293,24 @@ function _handleNext(streamie) {
 
   handling.add(batch);
 
-  // Before handling, invoke streamCallback to allow next item.
-  queueItem.streamCallback();
-
-  return Promise.resolve(p(streamie).handler(
+  Promise.resolve(p(streamie).handler(
     batchSize === 1 ? inputs[0] : inputs,
-    {batchNumber: ++p(streamie).state.count.batches}
+    {
+      batchNumber: ++p(streamie).state.count.batches,
+      streamie,
+      isFinalBatch
+    }
   ))
   .then(response => _handleResolution(streamie, batch, null, response))
   .catch(err => _handleResolution(streamie, batch, err))
-  .then(() => _refresh(streamie));
+  .then(() => {
+    if (isFinalBatch) {
+      p(this).state.completed = true;
+      p(this).promises.complete.deferred.resolve();
+      p(this).promises.done.deferred.resolve();
+    }
+    _refresh(streamie);
+  });
 }
 
 
@@ -285,10 +355,10 @@ function _handleResolution(streamie, batch, error, result) {
 /**
  *
  */
-function _childStream(streamie, config = {}) {
-  if (p(streamie).state.stopped) throw new Error(`Cannot add childStream to Streamie, Streamie has already been stopped.`);
+function _childStreamie(streamie, config = {}) {
+  if (p(streamie).state.stopped) throw new Error(`Cannot add childStreamie to Streamie, Streamie has already been stopped.`);
 
-  const childStream = new Streamie(Object.assign(
+  const childStreamie = new Streamie(Object.assign(
     {},
     config
   ));
@@ -303,21 +373,21 @@ function _childStream(streamie, config = {}) {
       }
     });
 
-    childStream.pipeIn(p(streamie).stream.pipe(flattenStream));
+    childStreamie.pipeIn(p(streamie).stream.pipe(flattenStream));
   }
-  else childStream.pipeIn(p(streamie).stream);
+  else childStreamie.pipeIn(p(streamie).stream);
 
-  p(streamie).children.push(childStream);
+  p(streamie).children.push(childStreamie);
 
-  // If childStream stops, called with "propagate," and this Streamie has no
-  // other children, we stop it as well.
-  childStream.on('stop', ({propagate}) => {
+  // If childStreamie stops, called with "propagate," and ALL of this streamie's
+  // children are stopped, we stop it as well.
+  childStreamie.on('stop', ({propagate}) => {
     if (!propagate) return;
-    if (p(streamie).children.length > 1) return;
-    streamie.stop({propagate})
+    if (p(streamie).children.some(child => !child.isStopped())) return;
+    streamie.stop({propagate});
   });
 
-  return childStream;
+  return childStreamie;
 }
 
 
