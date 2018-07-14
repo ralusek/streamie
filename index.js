@@ -1,5 +1,6 @@
 'use strict';
 
+const EventEmitter = require('events');
 const Stream = require('stream');
 
 const utils = require('./utils');
@@ -27,7 +28,7 @@ class Streamie {
     p(this).config.autoAdvance = true;
     p(this).config.batchSize = config.batchSize || 1;
     p(this).config.concurrency = config.concurrency || 1;
-    p(this).config.completeAfter = config.completeAfter;
+    p(this).config.stopAfter = config.stopAfter;
 
     // If this is specified, this function will be passed the result of the handler
     // function, and if true, will have the corresponding streamInput pushed into
@@ -43,6 +44,7 @@ class Streamie {
     });
     p(this).stream.resume(); // Set the stream to be readable.
 
+    p(this).children = []; // Children Streamies
 
     p(this).queues = {
       backlogged: [],
@@ -56,13 +58,24 @@ class Streamie {
 
     p(this).handler = config.handler || (item => item);
 
+    p(this).emitter = new EventEmitter();
+
     // Bootstrap state.
     p(this).state = {
+      stopped: false,
       count: { 
         total: 0,
-        batches: 0
+        batches: 0,
+        filteredThrough: 0
       }
     };
+  }
+
+  /**
+   *
+   */
+  on(event, callback) {
+    return p(this).emitter.on(event, callback);
   }
 
   /**
@@ -78,6 +91,21 @@ class Streamie {
    */
   concat(inputs) {
     inputs.forEach(input => this.push(input));
+    return this;
+  }
+
+  /**
+   *
+   */
+  stop({propagate = true} = {}) {
+    if (p(this).state.stopped) return this;
+    p(this).state.stopped = true;
+
+    p(this).emitter.emit('stop', {name: p(this).name, propagate});
+
+    // Defer execution to next tick prevent "write after end" error on stream.
+    setTimeout(() => p(this).stream.destroy());
+
     return this;
   }
 
@@ -115,6 +143,20 @@ class Streamie {
   filter(handler, config = {}) {
     return _childStream(this, Object.assign(config, {handler, filterTest: test => !!test}));
   }
+
+  /**
+   *
+   */
+  find(handler, config = {}) {
+    return _childStream(this, Object.assign(
+      config,
+      {
+        handler,
+        filterTest: test => !!test,
+        stopAfter: config.count || 1
+      }
+    ));
+  }
 }
 
 /**
@@ -137,6 +179,8 @@ function _advance(streamie) {
  *
  */
 function _refresh(streamie) {
+  if (p(streamie).state.stopped) return;
+
   const { advanced, backlogged } = p(streamie).queues;
   const { handling } = p(streamie).sets;
 
@@ -206,7 +250,10 @@ function _handleNext(streamie) {
 function _handleResolution(streamie, batch, error, result) {
   const { handling } = p(streamie).sets;
 
-  const { batchSize, filterTest } = p(streamie).config;
+  const { batchSize, stopAfter, filterTest } = p(streamie).config;
+
+  // TODO determine if there is a worthwhile distinction to allowing this to drain.
+  if (p(streamie).state.stopped) return;
 
   if (error) {
     console.log('ERROR', error);
@@ -224,7 +271,10 @@ function _handleResolution(streamie, batch, error, result) {
     if (!filterTest(result)) return;
     // Push the stream input associated with this result to the output stream.
     const inputs = batch.map(({streamInput}) => streamInput);
-    return p(streamie).stream.push(batchSize === 1 ? inputs[0] : inputs);
+    p(streamie).stream.push(batchSize === 1 ? inputs[0] : inputs);
+
+    // If stopAfter is specified, will stop if filtered count matches.
+    return (++p(streamie).state.count.filteredThrough === stopAfter) && streamie.stop();
   }
 
   // Push the result to the output stream.
@@ -236,6 +286,8 @@ function _handleResolution(streamie, batch, error, result) {
  *
  */
 function _childStream(streamie, config = {}) {
+  if (p(streamie).state.stopped) throw new Error(`Cannot add childStream to Streamie, Streamie has already been stopped.`);
+
   const childStream = new Streamie(Object.assign(
     {},
     config
@@ -254,6 +306,16 @@ function _childStream(streamie, config = {}) {
     childStream.pipeIn(p(streamie).stream.pipe(flattenStream));
   }
   else childStream.pipeIn(p(streamie).stream);
+
+  p(streamie).children.push(childStream);
+
+  // If childStream stops, called with "propagate," and this Streamie has no
+  // other children, we stop it as well.
+  childStream.on('stop', ({propagate}) => {
+    if (!propagate) return;
+    if (p(streamie).children.length > 1) return;
+    streamie.stop({propagate})
+  });
 
   return childStream;
 }

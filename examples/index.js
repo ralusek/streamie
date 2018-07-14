@@ -19,7 +19,7 @@ const queue = new Streamie({
 });
 
 
-queue
+const sup = queue
 .map(item => item.letter.toUpperCase(), {name: 'A'})
 .filter(letter => !['D', 'K', 'X'].includes(letter))
 .map(items => {
@@ -30,7 +30,16 @@ queue
   console.log('Should be flattened:', item);
   return item;
 }, {flatten: true})
-.map(item => timeout(() => console.log('Applies backpressure.'), 5000), {concurrency: 5});
+.map(item => {
+  return timeout(() => item, 5000)
+  .then(() => item);
+}, {concurrency: 10})
+.find(item => {
+  console.log('Testing', item);
+  return item === 'C' || item === 'Z';
+}, {count: 2})
+.map(item => console.log('Hi', item));
+
 
 
 
