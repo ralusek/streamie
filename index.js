@@ -223,6 +223,7 @@ function _advance(streamie) {
  */
 function _refresh(streamie) {
   if (p(streamie).state.stopped) return;
+  if (p(streamie).state.completed) return;
 
   const { advanced, backlogged } = p(streamie).queues;
   const { handling } = p(streamie).sets;
@@ -305,9 +306,11 @@ function _handleCurrentBatch(streamie) {
   .catch(err => _handleResolution(streamie, batch, err))
   .then(() => {
     if (isFinalBatch) {
-      p(this).state.completed = true;
-      p(this).promises.complete.deferred.resolve();
-      p(this).promises.done.deferred.resolve();
+      p(streamie).state.completed = true;
+      p(streamie).promises.complete.deferred.resolve();
+      p(streamie).promises.done.deferred.resolve();
+      p(streamie).stream.destroy();
+      p(streamie).children.forEach(childStreamie => childStreamie.complete());
     }
     _refresh(streamie);
   });
