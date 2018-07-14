@@ -111,11 +111,10 @@ class Streamie {
     if (!p(this).state.completing) {
       p(this).state.completing = true;
 
-      // Defer execution to next tick prevent "write after end" error on stream.
-      setTimeout(() => p(this).stream.destroy());
+      p(this).stream.cork()
     }
 
-    _refresh(this);
+    _handleCompletion(this);
 
     return p(this).promises.completed.promise;
   }
@@ -225,7 +224,7 @@ function _refresh(streamie) {
   if (p(streamie).state.stopped) return;
   if (p(streamie).state.completed) return;
 
-  const { advanced, backlogged } = p(streamie).queues;
+  const { advanced, backlogged, active } = p(streamie).queues;
   const { handling } = p(streamie).sets;
 
   // Ensure that streamie is not already handling at capacity.
@@ -242,7 +241,7 @@ function _refresh(streamie) {
   // Ensure that an item has been backlogged in the stream, or that the streamie
   // is in a completing state. If it is in a completing state, we proceed, as
   // we might need to drain a batch that would never finish filling out.
-  if (backlogged.length) _handleNextBacklogged(streamie);
+  _handleNextBacklogged(streamie);
   _handleCurrentBatch(streamie);
 }
 
@@ -252,6 +251,8 @@ function _refresh(streamie) {
  */
 function _handleNextBacklogged(streamie) {
   const { advanced, backlogged, active } = p(streamie).queues;
+
+  if (!advanced.length || !backlogged.length) return;
 
   const queueItem = Object.assign({}, advanced.shift(), backlogged.shift(), {activeAt: Date.now()});
 
@@ -272,13 +273,15 @@ function _handleCurrentBatch(streamie) {
   const { batchSize } = p(streamie).config;
   const { completing } = p(streamie).state;
 
-  const isFinalBatch = completing && !backlogged.length;
+  if (!active.length) return;
+
+  const isDrainingBatch = completing && !backlogged.length;
 
   // Ensure that the active amount of queue items is at batchSize.
   // The exception is if streamie is currently completing, and there is nothing
   // else backlogged, in which case we handle the batch prematurely, as there
   // will be no new items processed.
-  if ((active.length < batchSize) && !isFinalBatch) return; 
+  if ((active.length < batchSize) && !isDrainingBatch) return; 
 
 
   // In case the batch size has changed to something smaller than what is currently
@@ -299,19 +302,13 @@ function _handleCurrentBatch(streamie) {
     {
       batchNumber: ++p(streamie).state.count.batches,
       streamie,
-      isFinalBatch
+      isDrainingBatch
     }
   ))
   .then(response => _handleResolution(streamie, batch, null, response))
   .catch(err => _handleResolution(streamie, batch, err))
   .then(() => {
-    if (isFinalBatch) {
-      p(streamie).state.completed = true;
-      p(streamie).promises.complete.deferred.resolve();
-      p(streamie).promises.done.deferred.resolve();
-      p(streamie).stream.destroy();
-      p(streamie).children.forEach(childStreamie => childStreamie.complete());
-    }
+    _handleCompletion(streamie);
     _refresh(streamie);
   });
 }
@@ -358,6 +355,26 @@ function _handleResolution(streamie, batch, error, result) {
 /**
  *
  */
+function _handleCompletion(streamie) {
+  const { completed, completing } = p(streamie).state;
+  const { backlogged, active } = p(streamie).queues;
+  const { handling } = p(streamie).sets;
+
+  if (completed || !completing) return;
+  if (backlogged.length || active.length || handling.size) return _refresh(streamie);
+
+  p(streamie).state.completed = true;
+  p(streamie).promises.completed.deferred.resolve();
+  p(streamie).promises.done.deferred.resolve();
+  // Defer execution to next tick prevent "write after end" error on stream.
+  setTimeout(() => p(streamie).stream.destroy());
+  p(streamie).children.forEach(childStreamie => childStreamie.complete());
+}
+
+
+/**
+ *
+ */
 function _childStreamie(streamie, config = {}) {
   if (p(streamie).state.stopped) throw new Error(`Cannot add childStreamie to Streamie, Streamie has already been stopped.`);
 
@@ -371,6 +388,7 @@ function _childStreamie(streamie, config = {}) {
       objectMode: true,
       highWaterMark: config.concurrency || 1,
       transform: (input = [], encoding, callback) => {
+        if (!Array.isArray(input)) throw new Error(`Streamie cannot flatten input, expecting an array.`);
         input.forEach(item => flattenStream.push(item));
         callback();
       }
