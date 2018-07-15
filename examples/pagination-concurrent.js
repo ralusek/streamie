@@ -1,6 +1,6 @@
 'use strict';
 
-const Streamie = require('../index');
+const Streamie = require('../src/index');
 
 const request = require('request-promise');
 

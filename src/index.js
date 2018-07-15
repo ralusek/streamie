@@ -3,7 +3,7 @@
 const EventEmitter = require('events');
 const Stream = require('stream');
 
-const utils = require('./utils');
+const utils = require('../utils');
 
 
 // This establishes a private namespace.
@@ -128,8 +128,7 @@ class Streamie {
 
     p(this).emitter.emit('stop', {name: p(this).name, propagate});
 
-    // Defer execution to next tick prevent "write after end" error on stream.
-    setTimeout(() => p(this).stream.destroy());
+    _destroyStream(this);
 
     p(this).promises.done.deferred.resolve();
 
@@ -366,8 +365,8 @@ function _handleCompletion(streamie) {
   p(streamie).state.completed = true;
   p(streamie).promises.completed.deferred.resolve();
   p(streamie).promises.done.deferred.resolve();
-  // Defer execution to next tick prevent "write after end" error on stream.
-  setTimeout(() => p(streamie).stream.destroy());
+  
+  _destroyStream(streamie);
   p(streamie).children.forEach(childStreamie => childStreamie.complete());
 }
 
@@ -412,7 +411,6 @@ function _childStreamie(streamie, config = {}) {
 }
 
 
-
 /**
  *
  */
@@ -425,6 +423,16 @@ function _handleStreamInput(streamie, streamInput, streamCallback) {
   });
 
   _refresh(streamie);
+}
+
+
+/**
+ *
+ */
+function _destroyStream(streamie) {
+  // TODO investigate removing this, but currently here to swallow the occasional "write after end" error.
+  p(streamie).stream.on('error', () => {});
+  setTimeout(() => p(streamie).stream.destroy());
 }
 
 
