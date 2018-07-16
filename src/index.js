@@ -29,6 +29,7 @@ class Streamie {
     p(this).config.batchSize = config.batchSize || 1;
     p(this).config.concurrency = config.concurrency || 1;
     p(this).config.stopAfter = config.stopAfter;
+    p(this).config.useAggregate = config.useAggregate === true;
 
     // If this is specified, this function will be passed the result of the handler
     // function, and if true, will have the corresponding streamInput pushed into
@@ -46,7 +47,7 @@ class Streamie {
 
     p(this).children = []; // Children Streamies
 
-    p(this).aggregate; // Storage property for aggregate property.
+    p(this).aggregate = {}; // Storage property for aggregate property.
 
     p(this).queues = {
       backlogged: [],
@@ -175,6 +176,13 @@ class Streamie {
   /**
    *
    */
+  reduce(handler, config = {}) {
+    return _childStreamie(this, Object.assign(config, {handler, useAggregate: true}));
+  }
+
+  /**
+   *
+   */
   filter(handler, config = {}) {
     return _childStreamie(this, Object.assign(config, {handler, filterTest: test => !!test}));
   }
@@ -271,7 +279,7 @@ function _handleNextBacklogged(streamie) {
 function _handleCurrentBatch(streamie) {
   const { advanced, backlogged, active } = p(streamie).queues;
   const { handling } = p(streamie).sets;
-  const { batchSize } = p(streamie).config;
+  const { batchSize, concurrency, useAggregate } = p(streamie).config;
   const { completing } = p(streamie).state;
 
   if (!active.length) return;
@@ -298,14 +306,22 @@ function _handleCurrentBatch(streamie) {
 
   handling.add(batch);
 
-  Promise.resolve(p(streamie).handler(
+  const batchNumber = ++p(streamie).state.count.batches;
+
+  const handlerArgs = [
     batchSize === 1 ? inputs[0] : inputs,
     {
-      batchNumber: ++p(streamie).state.count.batches,
+      batchNumber,
+      // Round robin integer channel assignment between 1 and (conccurency + 1)
+      channel: (batchNumber % concurrency) + 1,
       streamie,
       isDrainingBatch
     }
-  ))
+  ];
+
+  if (useAggregate) handlerArgs.unshift(p(streamie).aggregate);
+
+  Promise.resolve(p(streamie).handler(...handlerArgs))
   .then(response => _handleResolution(streamie, batch, null, response))
   .catch(err => _handleResolution(streamie, batch, err))
   .then(() => {
@@ -321,7 +337,7 @@ function _handleCurrentBatch(streamie) {
 function _handleResolution(streamie, batch, error, result) {
   const { handling } = p(streamie).sets;
 
-  const { batchSize, stopAfter, filterTest } = p(streamie).config;
+  const { batchSize, stopAfter, filterTest, useAggregate } = p(streamie).config;
 
   // TODO determine if there is a worthwhile distinction to allowing this to drain.
   if (p(streamie).state.stopped) return;
@@ -349,7 +365,7 @@ function _handleResolution(streamie, batch, error, result) {
   }
 
   // Push the result to the output stream.
-  p(streamie).stream.push(result);
+  p(streamie).stream.push(useAggregate ? p(streamie).aggregate : result);
 }
 
 
