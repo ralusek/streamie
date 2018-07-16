@@ -7,18 +7,17 @@
 A streamie is an alternative to promises, streams, async iterators, arrays, and reactive observables like rxJS.
 
 ### Why should I use a streamie?
-Four reasons:
+Three reasons:
 
 1.) A `streamie` has useful iterator methods like `.map`, `.flatMap`, `.reduce`, `.filter`, `.find`, `.push`, and `.concat` on an infinite, asynchronous collection.
 
 2.) A `streamie` offers an extremely simple interface for modifying control flow through various asynchronous activities, notably:
   - `concurrency`: for any iterative method, a `concurrency` can be specified to parallelize that asynchronous action
-  - `batching`: for any iterative method, a `batchSize` can be specified to allow a batching of inputs up to this count before executing the interator method
-  - `flattening`: for any iterative method, `flatten`: `true` may be specified to flatten the output of the input stream to call the iterative method on the array elements of the input
+  - `batching`/`flattening`: for any iterative method, a `batchSize` can be specified to allow a batching of inputs up to this count before executing the iterator method. Likewise a `flatten`: `true` may be specified to flatten the input of the an iterator method.
+  - `backpressure`: backpressure is **automatically** handled so that asynchronous tasks at different points in the pipeline cannot iterate beyond what its outputs are capable of handling.
 
 3.) A `streamie` plays nicely with many other similar utilities, such as promises and streams. It can be outputted as a promise, or have a stream inputted or outputted.
 
-4.) Like streams, a `streamie` has automatic backpressure handling. Asynchronous tasks that run at completely incompatible speeds are automatically tuned to apply throttling to the asynchronous tasks that require it.
 
 ### How do I use streamie?
 
@@ -87,16 +86,18 @@ function listEveryPersonOnThePlanet() {
 }
 ```
 
-Now, let's say that we want to build up some detailed profiles on some likely terrorists. Like I said before, we're the government, so we don't have any capability to perform an indexed search on our database, and we'll be performing a filter at the application level. In the quest to find a likely terrorist, let's say that we're looking for males 18 and older.
+Now, let's say that we want to build up some detailed profiles on some likely terrorists. Like I said before, we're the government, so we don't have any capability to perform an indexed search on our database, and we'll be performing a filter at the application level.
+
+In our search for terrorists, let's say that we're looking for males 18 and older.
 
 ```js
 listEveryPersonOnThePlanet()
 .filter(person => person.sex === 'male' && person.age > 17);
 ```
 
-This is a good start. Note that the `.filter` function we defined will be executed **as new records come in**. So this is not a case of us fetching every person and then performing a filter, we would crash our application. We're the government, so you might expect that from us, but that's actually why we use `streamie`.
+This is a good start. Note that the `.filter` function we defined will be executed **as new records come in**. This is not a case of us fetching every person and then performing a filter after they've finished loading. Not only would that crash our application, but we wouldn't be able to continue processing any of the items as they were actually loaded.
 
-There is a problem with our code, though, which is that the `handler` from our `listEveryPersonOnThePlanet` function returns `suspects`, an *array* of people at a time. Fortunately, because `streamie` was built in the private sector, it has a way for us to transform this output so that a single person gets passed in at a time.
+There is a problem with our code, though, which is that the `handler` from our `listEveryPersonOnThePlanet` function returns `suspects`, an **array** of people at a time. Fortunately, because `streamie` was built in the private sector, it has a way for us to transform this output so that a single person gets passed in at a time.
 
 ```js
 listEveryPersonOnThePlanet()
