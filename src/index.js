@@ -220,6 +220,7 @@ class Streamie {
   }
 }
 
+
 /**
  *
  */
@@ -235,6 +236,7 @@ function _advance(streamie) {
 
   return advancedItem.promise;
 }
+
 
 /**
  *
