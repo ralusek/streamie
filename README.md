@@ -11,11 +11,14 @@ A streamie is an alternative to promises, streams, async iterators, arrays, and 
 Four reasons:
 
 1.) A `streamie` has useful iterator methods like `.map`, `.flatMap`, `.reduce`, `.filter`, `.find`, `.push`, and `.concat` on an infinite, asynchronous collection.
+
 2.) A `streamie` offers an extremely simple interface for modifying control flow through various asynchronous activities, notably:
   - `concurrency`: for any iterative method, a `concurrency` can be specified to parallelize that asynchronous action
   - `batching`: for any iterative method, a `batchSize` can be specified to allow a batching of inputs up to this count before executing the interator method
   - `flattening`: for any iterative method, `flatten`: `true` may be specified to flatten the output of the input stream to call the iterative method on the array elements of the input
+
 3.) A `streamie` plays nicely with many other similar utilities, such as promises and streams. It can be outputted as a promise, or have a stream inputted or outputted.
+
 4.) Like streams, a `streamie` has automatic backpressure handling. Asynchronous tasks that run at completely incompatible speeds are automatically tuned to apply throttling to the asynchronous tasks that require it.
 
 ### How do I use streamie?
