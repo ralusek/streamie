@@ -41,7 +41,8 @@ class Streamie {
     p(this).stream = new Stream.Transform({
       objectMode: true,
       highWaterMark: p(this).config.concurrency,
-      transform: (input, encoding, callback) => _handleStreamInput(this, input, callback)
+      transform: (input, encoding, callback) => _handleStreamInput(this, input, callback),
+      final: (callback) => _handleFinalStreamInput(this, callback) 
     });
     p(this).stream.resume(); // Set the stream to be readable.
 
@@ -133,7 +134,7 @@ class Streamie {
 
     _destroyStream(this);
 
-    p(this).promises.done.deferred.resolve();
+    p(this).promises.done.deferred.resolve(p(this).aggregate);
 
     return this;
   }
@@ -157,6 +158,7 @@ class Streamie {
    */
   pipeIn(stream) {
     stream.pipe(p(this).stream);
+    return this;
   }
 
   /**
@@ -164,6 +166,7 @@ class Streamie {
    */
   pipeOut(stream) {
     p(this).stream.pipe(stream);
+    return this;
   }
 
   /**
@@ -382,7 +385,7 @@ function _handleCompletion(streamie) {
 
   p(streamie).state.completed = true;
   p(streamie).promises.completed.deferred.resolve();
-  p(streamie).promises.done.deferred.resolve();
+  p(streamie).promises.done.deferred.resolve(p(streamie).aggregate);
   
   _destroyStream(streamie);
   p(streamie).children.forEach(childStreamie => childStreamie.complete());
@@ -451,6 +454,15 @@ function _destroyStream(streamie) {
   // TODO investigate removing this, but currently here to swallow the occasional "write after end" error.
   p(streamie).stream.on('error', () => {});
   setTimeout(() => p(streamie).stream.destroy());
+}
+
+
+/**
+ *
+ */
+function _handleFinalStreamInput(streamie, callback) {
+  streamie.complete()
+  .then(() => callback());
 }
 
 
