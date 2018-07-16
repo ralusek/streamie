@@ -1,6 +1,6 @@
 {
   "name": "streamie",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Javascript async iterator utilities with concurrency, backpressure, and flattening/batching.",
   "main": "lib/index.js",
   "repository": {
