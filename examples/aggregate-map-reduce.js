@@ -17,9 +17,9 @@ const streamie = new Streamie();
 streamie.pipeIn(getAliceInWonderlandText())
 .map(chunk => chunk.toString())
 .map(text => text.split(/[^\w]/))
-.map((word, {batchNumber}) => {
+.flatMap((word, {batchNumber}) => {
   console.log('Processed', batchNumber, 'words');
   return word.toLowerCase();
-}, {flatten: true})
+})
 .reduce((aggregate, word) => aggregate[word] = (aggregate[word] || 0) + 1)
 .then((wordCount) => console.log(wordCount));

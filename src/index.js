@@ -179,6 +179,13 @@ class Streamie {
   /**
    *
    */
+  flatMap(handler, config = {}) {
+    return _childStreamie(this, Object.assign(config, {handler, flatten: true}));
+  }
+
+  /**
+   *
+   */
   reduce(handler, config = {}) {
     return _childStreamie(this, Object.assign(config, {handler, useAggregate: true}));
   }
