@@ -1,7 +1,6 @@
 <img width="450px"  src="https://i.imgur.com/Cp7IQHq.png" title="logo"/>
 
-# Streamie
-It's ex-streamie cool!
+## Streamie: It's ex-streamie cool!
 
 ### What is a streamie?
 
@@ -44,7 +43,7 @@ The methods `.map`, `.filter` here are allowing a function to be passed in as a 
 Where a `streamie` really shines, however, is in massive or indefinite asynchronous tasks, such as fetching paginated records, performing long running jobs, or any other iterated async operation.
 
 
-#### Real world example
+### Real world example
 
 Let's say we're the NSA, and have a record in our database for every person on the planet, and we paginate through these records like this:
 ```js
@@ -91,7 +90,7 @@ listEveryPersonOnThePlanet()
 .filter(person => person.sex === 'male' && person.age > 17);
 ```
 
-This is a good start. Note that `.filter`'s function we defined will be executed *as new records come in*. So this is not a case of us fetching every person and then performing a filter, we would crash our application. We're the government, so you might expect that from us, but that's actually why we use `streamie`.
+This is a good start. Note that the `.filter` function we defined will be executed **as new records come in**. So this is not a case of us fetching every person and then performing a filter, we would crash our application. We're the government, so you might expect that from us, but that's actually why we use `streamie`.
 
 There is a problem with our code, though, which is that the `handler` from our `listEveryPersonOnThePlanet` function returns `suspects`, an *array* of people at a time. Fortunately, because `streamie` was built in the private sector, it has a way for us to transform this output so that a single person gets passed in at a time.
 
@@ -109,7 +108,7 @@ The next thing we'll want to do with our terrorists is retrieve a detailed dossi
 nsa.suspects.retrieveDossiers([person1.id, person2.id, person3.id]);
 ```
 
-You'll notice that we are expected to pass in an *array* of person ids to this method. The reason this works this way is because what happens when we call this function is that an NSA government bureacrat receives a phone call, and they telegraph the pentagon, where somebody gets up and pulls out a physical dossier on a terrorist. They then take a picture of the documents on a government camera that was built in the 70s for 3 billion dollars, have the pictures processed in a darkroom by a man with the highest possible security clearance, who then sends the processed photographs in a pneumatic tube back to the NSA, where we a clerk transcribes the text from the photo and responds to the api call. Naturally, this whole process takes quite a bit of time, so it's much easier for us to send up a batch of around 100 people at a time so that multiple dossiers can be processed simultaneously.
+You'll notice that we are expected to pass in an **array** of person ids to this method. The reason this works this way is because what happens when we call this function is that an NSA government bureacrat receives a phone call, and they telegraph the pentagon, where somebody gets up and pulls out a physical dossier on a terrorist. They then take a picture of the documents on a government camera that was built in the 70s for 3 billion dollars, have the pictures processed in a darkroom by a man with the highest possible security clearance, who then sends the processed photographs in a pneumatic tube back to the NSA, where a clerk transcribes the text from the photo and responds to the api call. Naturally, this whole process takes quite a bit of time, so it's much easier for us to send up a batch of around 100 people at a time so that multiple dossiers can be processed simultaneously.
 
 So for this next call, we'll want to perform effectively the opposite of the `flatten` we did in the previous step, and instead provide a `batchSize` of `100` to allow the filtered people to pool together for the next api call.
 
