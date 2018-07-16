@@ -46,6 +46,8 @@ class Streamie {
 
     p(this).children = []; // Children Streamies
 
+    p(this).aggregate; // Storage property for aggregate property.
+
     p(this).queues = {
       backlogged: [],
       advanced: [], // Holds items ready to be handled
