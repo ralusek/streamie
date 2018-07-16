@@ -43,6 +43,10 @@ The methods `.map`, `.filter` here are allowing a function to be passed in as a 
 Where a `streamie` really shines, however, is in massive or indefinite asynchronous tasks, such as fetching paginated records, performing long running jobs, or any other iterated async operation.
 
 
+### Live Demo:
+https://codesandbox.io/s/9j8y4mm1z4
+
+
 ### Real world example
 
 Let's say we're the NSA, and have a record in our database for every person on the planet, and we paginate through these records like this:
