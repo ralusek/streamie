@@ -1,6 +1,6 @@
 'use strict';
 
-const Streamie = require('../src/index');
+const { source } = require('../src/index');
 
 const request = require('request-promise');
 
@@ -12,24 +12,15 @@ function getMLBStats(page) {
 }
 
 
-const streamie = new Streamie({
-  handler: (page, {streamie}) => {
-    return getMLBStats(page)
-    .then(results => {
-      if (results.row) streamie.push(page + 1);
-      else streamie.complete();
+source((page = 1, {streamie}) => {
+  return getMLBStats(page)
+  .then(results => {
+    if (results.row) streamie.push(page + 1);
+    else streamie.complete();
 
-      return results.row;
-    });
-  }
-});
-
-streamie.push(1);
-
-
-
-
-streamie
+    return results.row;
+  });
+})
 .filter((player) => player.name_last[0] === 'M', {flatten: true})
 .map(player => player.name_display_roster)
 .map((player) => console.log(player))

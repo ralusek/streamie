@@ -1,6 +1,6 @@
 'use strict';
 
-const Streamie = require('../src/index');
+const { source } = require('../src/index');
 
 const request = require('request-promise');
 
@@ -17,28 +17,19 @@ const CONCURRENCY = 3;
 
 let completed = 0;
 
-const streamie = new Streamie({
-  handler: (page, {streamie}) => {
-    return getMLBStats(page, LIMIT)
-    .then(results => {
-      if (results.row) {
-        streamie.push(page + CONCURRENCY);
-        return results.row;
-      }
-      else if (++completed === CONCURRENCY) streamie.complete();
-    });
-  },
-  concurrency: CONCURRENCY
-});
 
-streamie.push(1);
-streamie.push(2);
-streamie.push(3);
-
-
-
-streamie.map((player) => {
+source((page, {streamie, channel}) => {
+  page = page || channel; // If page is undefined, we default to the concurrency channel
+  return getMLBStats(page, LIMIT)
+  .then(results => {
+    if (results.row) {
+      streamie.push(page + CONCURRENCY);
+      return results.row;
+    }
+    else if (++completed === CONCURRENCY) streamie.complete();
+  });
+}, {concurrency: CONCURRENCY})
+.map((player) => {
   console.log(player);
 }, {flatten: true})
 .then(() => console.log('DONE'));
-

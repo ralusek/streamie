@@ -26,11 +26,11 @@ Three reasons:
 Fundamentally, a `streamie` is an asynchronous collection of values that can be iterated on with familiar methods.
 
 ```js
-const letters = new Streamie();
-// Push in some values to the queue.
-letters.concat(['a', 'b', 'c', 'd', 'e', 'f', 'g']);
+const { source } = require('streamie');
+
+// Create a new asynchronous queue.
+source(['a', 'b', 'c', 'd', 'e', 'f', 'g'])
 // Use familar iterator methods.
-letters
 .map(letter => letter.toUpperCase()) // Is passed every letter, capitalizes them
 .filter(letter => letter !== 'C') // Is passed every capitalized letter, filters out "C"
 .map(letters => letters[0] + letters[1], {batchSize: 2}) // Batches together letters in groups of 2, outputs them concatenated.
@@ -59,30 +59,27 @@ nsa.suspects.surveil({page: 2, limit: 25});
 
 There are about 7,600,000,000 probable terrorists currently alive, and if we surveil them 25 at a time, that's 304,000,000 requests to make. Because the NSA is a government institution, we don't know how to index our database, so we need to do a lot of full database scans. This is where we'll need a `streamie`.
 
- What we want to do with our NSA records is have a stream of `page` values for the current page we're paginating through, and define a `handler` function which performs an asynchronous fetch of records for the current value (`pageNumber`) being handled in the queue.
+What we want to do with our NSA records is have a stream of `pageNumber` values for the current page we're paginating through, and define a `handler` function which performs an asynchronous fetch of records for the current value (`pageNumber`) being handled in the queue.
+
+Below, because all that we've done is provide a `handler` function, but no seed values to the `source` method, it automatically kickstarts
+the streamie by pushing in `undefined` as the first value, which we can see we've specified with `pageNumber` to default to `1`.
 
 ```js
+const { source } = require('streamie');
+
 function listEveryPersonOnThePlanet() {
-  const streamie = new Streamie({
-    // This handler allows us to specify a function that will be called for every item pushed into the streamie.
-    // The current item in the streamie is passed in as the first argument, in this case it will be the current `pageNumber` number
-    handler: (pageNumber, {streamie}) => {
-      return nsa.suspects.surveil({page: pageNumber, limit: 25})
-      .then((suspects = []) => {
-        // If there are still terrorists we haven't surveiled, push next page number into queue.
-        if (suspects.length) streamie.push(pageNumber + 1);
-        // If we've looked at all of the terrorists, we complete the streamie.
-        else streamie.complete();
+  // Here we are specifying a handler function, to be called for every item in our asynchronous queue.
+  source((pageNumber = 1, {streamie}) => {
+  return nsa.suspects.surveil({page: pageNumber, limit: 25})
+  .then((suspects = []) => {
+    // If there are still terrorists we haven't surveiled, push next page number into queue.
+    if (suspects.length) streamie.push(pageNumber + 1);
+    // If we've looked at all of the terrorists, we complete the streamie.
+    else streamie.complete();
 
-        return suspects;
-      });
-    }
+    return suspects;
   });
-
-  // We kick off the process by pushing in the first value that we want to return, `pageNumber` 1.
-  streamie.push(1);
-
-  return streamie;
+});
 }
 ```
 

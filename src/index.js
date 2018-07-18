@@ -218,6 +218,48 @@ class Streamie {
     return p(this).promises.done.promise
     .then(...args);
   }
+
+  /**
+   * Automatically source a new streamie based off of likely args.
+   */
+  static source(...args) {
+    let seed;
+    let handler;
+
+    let current = args.shift();
+    if (Array.isArray(current)) {
+      seed = current;
+      current = args.shift();
+    }
+
+    if (current && (current.apply && current.call)) {
+      handler = current;
+      current = args.shift();
+    }
+
+    const config = current || {};
+    config.handler = handler;
+
+    const streamie = new Streamie(config);
+
+    // Kickstart a new streamie with seed values.
+    if ((seed && seed.length) || config.kickstart !== false) {
+      delete config.kickstart;
+
+      // If seed is explicitly defined, use these values.
+      if (seed) streamie.concat(seed);
+      // If seed is not explicitly defined, but a handler has been, push in `concurrency` amount of undefined values.
+      else if (handler) {
+        const amount = config.concurrency || 1;
+
+        for (let i = 0; i < amount; i++) {
+          streamie.push(undefined);
+        }
+      }
+    }
+
+    return streamie;
+  }
 }
 
 
