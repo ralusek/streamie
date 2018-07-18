@@ -69,17 +69,17 @@ const { source } = require('streamie');
 
 function listEveryPersonOnThePlanet() {
   // Here we are specifying a handler function, to be called for every item in our asynchronous queue.
-  source((pageNumber = 1, {streamie}) => {
-  return nsa.suspects.surveil({page: pageNumber, limit: 25})
-  .then((suspects = []) => {
-    // If there are still terrorists we haven't surveiled, push next page number into queue.
-    if (suspects.length) streamie.push(pageNumber + 1);
-    // If we've looked at all of the terrorists, we complete the streamie.
-    else streamie.complete();
+  return source((pageNumber = 1, {streamie}) => {
+    return nsa.suspects.surveil({page: pageNumber, limit: 25})
+    .then((suspects = []) => {
+      // If there are still terrorists we haven't surveiled, push next page number into queue.
+      if (suspects.length) streamie.push(pageNumber + 1);
+      // If we've looked at all of the terrorists, we complete the streamie.
+      else streamie.complete();
 
-    return suspects;
+      return suspects;
+    });
   });
-});
 }
 ```
 
