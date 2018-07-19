@@ -38,13 +38,7 @@ class Streamie {
     p(this).config.filterTest = config.filterTest;
 
 
-    p(this).stream = new Stream.Transform({
-      objectMode: true,
-      highWaterMark: p(this).config.concurrency,
-      transform: (input, encoding, callback) => _handleStreamInput(this, input, callback),
-      final: (callback) => _handleFinalStreamInput(this, callback) 
-    });
-    p(this).stream.resume(); // Set the stream to be readable.
+    p(this).stream = _createStream(this);
 
     p(this).children = []; // Children Streamies
 
@@ -505,6 +499,10 @@ function _handleStreamInput(streamie, streamInput, streamCallback) {
  */
 function _destroyStream(streamie) {
   // TODO investigate removing this, but currently here to swallow the occasional "write after end" error.
+
+  // Add support for older versions of node
+  if (!p(streamie).stream.destroy) return;
+
   p(streamie).stream.on('error', () => {});
   setTimeout(() => p(streamie).stream.destroy());
 }
@@ -515,7 +513,32 @@ function _destroyStream(streamie) {
  */
 function _handleFinalStreamInput(streamie, callback) {
   streamie.complete()
-  .then(() => callback());
+  .then(() => callback && callback());
+}
+
+
+/**
+ *
+ */
+function _createStream(streamie) {
+  const config = {
+    objectMode: true,
+    highWaterMark: p(streamie).config.concurrency,
+    transform: (input, encoding, callback) => _handleStreamInput(streamie, input, callback)
+  };
+
+  const version = process.version.match(/v([0-9]+)\./)[1];
+
+
+  // Requires Node 8+
+  if (version >= 8) config.final = (callback) => _handleFinalStreamInput(streamie, callback);
+  else config.flush = (callback) => _handleFinalStreamInput(streamie, callback);
+
+  const stream = new Stream.Transform(config);
+
+  stream.resume(); // Set the stream to be readable.
+
+  return  stream;
 }
 
 

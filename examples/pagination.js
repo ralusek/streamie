@@ -25,4 +25,3 @@ source((page = 1, {streamie}) => {
 .map(player => player.name_display_roster)
 .map((player) => console.log(player))
 .then(() => console.log('DONE'));
-
