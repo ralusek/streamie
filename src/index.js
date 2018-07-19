@@ -5,6 +5,8 @@ const Stream = require('stream');
 
 const utils = require('../utils');
 
+const functionalityTestStream = new Stream.Transform();
+
 
 // This establishes a private namespace.
 const namespace = new WeakMap();
@@ -527,10 +529,8 @@ function _createStream(streamie) {
     transform: (input, encoding, callback) => _handleStreamInput(streamie, input, callback)
   };
 
-  const test = new Stream.Transform();
-
   // Requires Node 8+
-  if (test.destroy) config.final = (callback) => _handleFinalStreamInput(streamie, callback);
+  if (functionalityTestStream.destroy) config.final = (callback) => _handleFinalStreamInput(streamie, callback);
   else config.flush = (callback) => _handleFinalStreamInput(streamie, callback);
 
   const stream = new Stream.Transform(config);
