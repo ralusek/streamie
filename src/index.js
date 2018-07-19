@@ -527,11 +527,10 @@ function _createStream(streamie) {
     transform: (input, encoding, callback) => _handleStreamInput(streamie, input, callback)
   };
 
-  const version = process.version.match(/v([0-9]+)\./)[1];
-
+  const test = new Stream.Transform();
 
   // Requires Node 8+
-  if (version >= 8) config.final = (callback) => _handleFinalStreamInput(streamie, callback);
+  if (test.destroy) config.final = (callback) => _handleFinalStreamInput(streamie, callback);
   else config.flush = (callback) => _handleFinalStreamInput(streamie, callback);
 
   const stream = new Stream.Transform(config);
