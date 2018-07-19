@@ -438,8 +438,10 @@ function _handleCompletion(streamie) {
   p(streamie).promises.completed.deferred.resolve();
   p(streamie).promises.done.deferred.resolve(p(streamie).aggregate);
   
+  // Signal completion to children.
+  p(streamie).stream.push(null);
   _destroyStream(streamie);
-  p(streamie).children.forEach(childStreamie => childStreamie.complete());
+  // p(streamie).children.forEach(childStreamie => childStreamie.complete());
 }
 
 
