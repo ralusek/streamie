@@ -23,5 +23,5 @@ source((page = 1, {streamie}) => {
 })
 .filter((player) => player.name_last[0] === 'M', {flatten: true})
 .map(player => player.name_display_roster)
-.map((player) => console.log(player))
+.each((player) => console.log(player))
 .then(() => console.log('DONE'));

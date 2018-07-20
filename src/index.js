@@ -32,6 +32,7 @@ class Streamie {
     p(this).config.concurrency = config.concurrency || 1;
     p(this).config.stopAfter = config.stopAfter;
     p(this).config.useAggregate = config.useAggregate === true;
+    p(this).config.passThrough = config.passThrough || false;
 
     // If this is specified, this function will be passed the result of the handler
     // function, and if true, will have the corresponding streamInput pushed into
@@ -190,7 +191,7 @@ class Streamie {
    *
    */
   filter(handler, config = {}) {
-    return _childStreamie(this, Object.assign(config, {handler, filterTest: test => !!test}));
+    return _childStreamie(this, Object.assign(config, {handler, filterTest: test => !!test, passThrough: true}));
   }
 
   /**
@@ -202,9 +203,17 @@ class Streamie {
       {
         handler,
         filterTest: test => !!test,
-        stopAfter: config.count || 1
+        stopAfter: config.count || 1,
+        passThrough: true
       }
     ));
+  }
+
+  /**
+   * TODO consider naming "access"
+   */
+  each(handler, config = {}) {
+    return _childStreamie(this, Object.assign(config, {handler, passThrough: true}));
   }
 
   /**
@@ -387,7 +396,7 @@ function _handleCurrentBatch(streamie) {
 function _handleResolution(streamie, batch, error, result) {
   const { handling } = p(streamie).sets;
 
-  const { batchSize, stopAfter, filterTest, useAggregate } = p(streamie).config;
+  const { batchSize, stopAfter, filterTest, useAggregate, passThrough } = p(streamie).config;
 
   // TODO determine if there is a worthwhile distinction to allowing this to drain.
   if (p(streamie).state.stopped) return;
@@ -404,18 +413,26 @@ function _handleResolution(streamie, batch, error, result) {
   // Resolve _advance promises.
   batch.forEach(batchItem => batchItem.deferred.resolve(batchItem.result));
 
+  // If passThrough is true, we change the output to be the handler's input, rather than its
+  // result. This is used for functions like .filter, .find, and .each
+  let output = result;
+  if (passThrough === true) {
+    const inputs = batch.map(({streamInput}) => streamInput);
+    output = batchSize === 1 ? inputs[0] : inputs;
+  }
+
+  // If filterTest is defined, we test the result.
   if (filterTest) {
     if (!filterTest(result)) return;
-    // Push the stream input associated with this result to the output stream.
-    const inputs = batch.map(({streamInput}) => streamInput);
-    p(streamie).stream.push(batchSize === 1 ? inputs[0] : inputs);
+    
+    p(streamie).stream.push(output);
 
     // If stopAfter is specified, will stop if filtered count matches.
     return (++p(streamie).state.count.filteredThrough === stopAfter) && streamie.stop();
   }
 
   // Push the result to the output stream.
-  p(streamie).stream.push(useAggregate ? p(streamie).aggregate : result);
+  p(streamie).stream.push(useAggregate ? p(streamie).aggregate : output);
 }
 
 

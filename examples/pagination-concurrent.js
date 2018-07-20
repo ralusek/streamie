@@ -29,7 +29,5 @@ source((page, {streamie, channel}) => {
     else if (++completed === CONCURRENCY) streamie.complete();
   });
 }, {concurrency: CONCURRENCY})
-.map((player) => {
-  console.log(player);
-}, {flatten: true})
+.each((player) => console.log(player), {flatten: true})
 .then(() => console.log('DONE'));
