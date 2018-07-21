@@ -27,7 +27,7 @@ class Streamie {
     // Handle configuration.
     p(this).config = {};
 
-    p(this).config.autoAdvance = true;
+    p(this).config.autoAdvance = config.autoAdvance !== false;
     p(this).config.batchSize = config.batchSize || 1;
     p(this).config.concurrency = config.concurrency || 1;
     p(this).config.stopAfter = config.stopAfter;
@@ -411,7 +411,7 @@ function _handleResolution(streamie, batch, error, result) {
   batch.resolvedAt = Date.now();
 
   // Resolve _advance promises.
-  batch.forEach(batchItem => batchItem.deferred.resolve(batchItem.result));
+  batch.forEach(batchItem => batchItem.deferred.resolve(result));
 
   // If passThrough is true, we change the output to be the handler's input, rather than its
   // result. This is used for functions like .filter, .find, and .each
