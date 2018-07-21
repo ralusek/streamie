@@ -2,9 +2,13 @@
 
 ## Streamie: It's ex-streamie cool!
 
+[![GitHub license](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/ralusek/streamie/blob/master/LICENSE)
+[![npm version](https://img.shields.io/npm/v/streamie.svg?style=flat)](https://www.npmjs.com/package/streamie)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/ralusek/streamie/blob/master/LICENSE)
+
 ### What is a streamie?
 
-A streamie is an alternative to promises, streams, async iterators, arrays, and reactive observables like rxJS.
+A streamie is an alternative to promises, streams, async iterators, arrays, and reactive observables like rxJS or Highland.
 
 ### Why should I use a streamie?
 Three reasons:
