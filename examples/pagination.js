@@ -14,6 +14,7 @@ function getMLBStats(page) {
 const term = 'matt';
 
 source((page = 1, { streamie }) => {
+  console.log('Pages handled per second:', streamie.metrics.time.handledPerSecond.items);
   return getMLBStats(page)
   .then(results => {
     if (results.row) streamie.push(page + 1);

@@ -20,6 +20,7 @@ let completed = 0;
 
 source((page, {streamie, channel}) => {
   page = page || channel; // If page is undefined, we default to the concurrency channel
+
   return getMLBStats(page, LIMIT)
   .then(results => {
     if (results.row) {

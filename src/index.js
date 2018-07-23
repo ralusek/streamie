@@ -74,9 +74,34 @@ class Streamie {
       count: { 
         total: 0,
         batches: 0,
+        batchesHandled: 0,
+        itemsHandled: 0,
         filteredThrough: 0
+      },
+      time: {
+        createdAt: Date.now(),
+        avgTimeHandling: 0
       }
     };
+
+    Object.defineProperty(this, 'metrics', {
+      get() {
+        const msSinceCreated = Date.now() - p(this).state.time.createdAt;
+        const secondsSinceCreated = msSinceCreated / 1000;
+        return {
+          ...p(this).state,
+          count: {...p(this).state.count},
+          time: {
+            ...p(this).state.time,
+            msSinceCreated,
+            handledPerSecond: {
+              batches: p(this).state.count.batchesHandled / secondsSinceCreated,
+              items: p(this).state.count.itemsHandled / secondsSinceCreated
+            }
+          },
+        }
+      }
+    });
   }
 
   /**
@@ -358,10 +383,7 @@ function _handleCurrentBatch(streamie) {
   const batch = active.slice(0, batchSize);
   p(streamie).queues.active = active.slice(batchSize);
 
-  const inputs = batch.map(queueItem => {
-    queueItem.handlingAt = Date.now();
-    return queueItem.streamInput;
-  });
+  const inputs = batch.map(queueItem => queueItem.streamInput);
 
   handling.add(batch);
 
@@ -370,15 +392,17 @@ function _handleCurrentBatch(streamie) {
   const handlerArgs = [
     batchSize === 1 ? inputs[0] : inputs,
     {
+      streamie,
       batchNumber,
       // Round robin integer channel assignment between 1 and (conccurency + 1)
       channel: (batchNumber % concurrency) + 1,
-      streamie,
       isDrainingBatch
     }
   ];
 
   if (useAggregate) handlerArgs.unshift(p(streamie).aggregate);
+
+  batch.handlingAt = Date.now();
 
   Promise.resolve(p(streamie).handler(...handlerArgs))
   .then(response => _handleResolution(streamie, batch, null, response))
@@ -407,8 +431,11 @@ function _handleResolution(streamie, batch, error, result) {
     return;
   }
 
+  p(streamie).state.count.batchesHandled++;
+  p(streamie).state.count.itemsHandled += batch.length;
+
   handling.delete(batch);
-  batch.resolvedAt = Date.now();
+  _updateMetrics(streamie, batch);
 
   // Resolve _advance promises.
   batch.forEach(batchItem => batchItem.deferred.resolve(result));
@@ -433,6 +460,16 @@ function _handleResolution(streamie, batch, error, result) {
 
   // Push the result to the output stream.
   p(streamie).stream.push(useAggregate ? p(streamie).aggregate : output);
+}
+
+
+/**
+ *
+ */
+function _updateMetrics(streamie, batch) {
+  const { avgTimeHandling } = p(streamie).state.time;
+  const timeHandling = Date.now() - batch.handlingAt;
+  p(streamie).state.time.avgTimeHandling = utils.math.rollingAverage(timeHandling, avgTimeHandling, p(streamie).state.count.batchesHandled);
 }
 
 
