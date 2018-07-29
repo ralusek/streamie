@@ -25,4 +25,5 @@ source((page = 1, { streamie }) => {
 })
 .filter(player => player.name_display_first_last.match(new RegExp(term, 'i')), { flatten: true })
 .each(player => console.log(player.name_display_roster))
-.then(() => console.log('DONE'));
+.reduce((agg, player) => agg.count = (agg.count || 0) + 1)
+.then((a) => console.log('DONE', a));
