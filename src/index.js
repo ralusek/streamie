@@ -353,7 +353,7 @@ function _handleNextBacklogged(streamie) {
 
   // _handleCurrentBatch(streamie);
 
-  queueItem.streamCallback();
+  setTimeout(() => queueItem.streamCallback());
 }
 
 
