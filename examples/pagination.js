@@ -17,10 +17,11 @@ source((page = 1, { streamie }) => {
   console.log('Pages handled per second:', streamie.metrics.time.handledPerSecond.items);
   return getMLBStats(page)
   .then(results => {
-    if (results.row) streamie.push(page + 1);
-    else streamie.complete();
-
-    return results.row;
+    if (results.row) {
+      streamie.push(page + 1);
+      return Array.isArray(results.row) ? results.row : [results.row];
+    }
+    streamie.complete();
   });
 })
 .filter(player => player.name_display_first_last.match(new RegExp(term, 'i')), { flatten: true })

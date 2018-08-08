@@ -27,11 +27,17 @@ class Streamie {
     // Handle configuration.
     p(this).config = {};
 
-    p(this).config.autoAdvance = config.autoAdvance !== false;
+    p(this).config.throttle = config.throttle;
+    p(this).config.autoAdvance = !!config.throttle || (config.autoAdvance !== false);
     p(this).config.batchSize = config.batchSize || 1;
     p(this).config.concurrency = config.concurrency || 1;
     p(this).config.stopAfter = config.stopAfter;
+
+    // Whether to pass in the "aggregate" value to the handler. (i.e. reduce functions)
     p(this).config.useAggregate = config.useAggregate === true;
+
+    // Whether or not the input should be passed through to the output, rather than
+    // the result of the handler function. (i.e. find/filter functions)
     p(this).config.passThrough = config.passThrough || false;
 
     // If this is specified, this function will be passed the result of the handler
@@ -65,6 +71,8 @@ class Streamie {
     p(this).handler = config.handler || (item => item);
 
     p(this).emitter = new EventEmitter();
+
+    p(this).activeTimeout = null;
 
     // Bootstrap state.
     p(this).state = {
@@ -327,8 +335,14 @@ function _refresh(streamie) {
   // configured to do so.
   if (!advanced.length) {
     if (!p(streamie).config.autoAdvance) return;
-    _advance(streamie);
-    return;
+    if (!p(streamie).config.throttle) _advance(streamie);
+    else if (!p(streamie).activeTimeout) {
+      _advance(streamie);
+      p(streamie).activeTimeout = setTimeout(() => {
+        p(streamie).activeTimeout = null;
+        _refresh(streamie);
+      }, p(streamie).config.throttle);
+    }
   }
 
   // Ensure that an item has been backlogged in the stream, or that the streamie
