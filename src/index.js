@@ -141,9 +141,10 @@ class Streamie {
   /**
    *
    */
-  complete() {
+  complete(finalValue) {
     if (!p(this).state.completing) {
       p(this).state.completing = true;
+      p(this).finalValue = finalValue;
 
       p(this).stream.cork()
     }
@@ -439,19 +440,26 @@ function _handleResolution(streamie, batch, error, result) {
   // TODO determine if there is a worthwhile distinction to allowing this to drain.
   if (p(streamie).state.stopped) return;
 
-  if (error) {
-    console.log('ERROR', error);
-    // TODO handle.
-    return;
-  }
 
   p(streamie).state.count.batchesHandled++;
   p(streamie).state.count.itemsHandled += batch.length;
 
   handling.delete(batch);
+
   _updateMetrics(streamie, batch);
 
-  // Resolve _advance promises.
+  if (error) {
+    console.log('ERROR', error);
+    // Reject _advance promises.
+    batch.forEach(batchItem => batchItem.deferred.reject(error));
+
+    // Push emit an error from the output stream.
+    p(streamie).stream.emit('error', error);
+
+    return;
+  }
+
+  // Resolve/Reject _advance promises.
   batch.forEach(batchItem => batchItem.deferred.resolve(result));
 
   // If passThrough is true, we change the output to be the handler's input, rather than its
@@ -499,8 +507,9 @@ function _handleCompletion(streamie) {
   if (backlogged.length || active.length || handling.size) return _refresh(streamie);
 
   p(streamie).state.completed = true;
-  p(streamie).promises.completed.deferred.resolve();
-  p(streamie).promises.done.deferred.resolve(p(streamie).aggregate);
+  const finalValue = p(streamie).finalValue !== undefined ? p(streamie).finalValue : p(streamie).aggregate;
+  p(streamie).promises.completed.deferred.resolve(finalValue);
+  p(streamie).promises.done.deferred.resolve(finalValue);
   
   // Signal completion to children.
   p(streamie).stream.push(null);
