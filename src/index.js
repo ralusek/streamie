@@ -3,7 +3,7 @@
 const EventEmitter = require('events');
 const Stream = require('stream');
 
-const utils = require('../utils');
+const utils = require('./utils');
 
 const functionalityTestStream = new Stream.Transform();
 
@@ -22,7 +22,7 @@ function p(object) {
 class Streamie {
   constructor(config = {}) {
     
-    p(this).name = config.name;
+    p(this).name = config.name || utils.string.generateId();
 
     // Handle configuration.
     p(this).config = {};
@@ -69,6 +69,8 @@ class Streamie {
     };
 
     p(this).handler = config.handler || (item => item);
+
+    p(this).errorHandlers = [];
 
     p(this).emitter = new EventEmitter();
 
@@ -127,6 +129,14 @@ class Streamie {
     if (p(this).state.stopped) throw new Error('Cannot push to streamie, already stopped.');
 
     p(this).stream.write(input);
+    return this;
+  }
+
+  /**
+   *
+   */
+  error(error) {
+    _handleError(this, error);
     return this;
   }
 
@@ -259,6 +269,14 @@ class Streamie {
   }
 
   /**
+   *
+   */
+  snatch(fn) {
+    p(this).errorHandlers.push(fn);
+    return this;
+  }
+
+  /**
    * Automatically source a new streamie based off of likely args.
    */
   static source(...args) {
@@ -362,12 +380,13 @@ function _handleNextBacklogged(streamie) {
 
   if (!advanced.length || !backlogged.length) return;
 
+  // Associate and "consume" an `advanced` queue item placeholder with a `backlogged` queueItem.
   const queueItem = Object.assign({}, advanced.shift(), backlogged.shift(), {activeAt: Date.now()});
 
+  // Push the current queueItem into the active queue.
   active.push(queueItem);
 
-  // _handleCurrentBatch(streamie);
-
+  // Calling the streamCallback allows for next item to be passed into the Transform stream.
   setTimeout(() => queueItem.streamCallback());
 }
 
@@ -404,15 +423,17 @@ function _handleCurrentBatch(streamie) {
 
   const batchNumber = ++p(streamie).state.count.batches;
 
+  p(streamie).currentMeta = {
+    streamie,
+    batchNumber,
+    // Round robin integer channel assignment between 1 and (conccurency + 1)
+    channel: (batchNumber % concurrency) + 1,
+    isDrainingBatch
+  };
+
   const handlerArgs = [
     batchSize === 1 ? inputs[0] : inputs,
-    {
-      streamie,
-      batchNumber,
-      // Round robin integer channel assignment between 1 and (conccurency + 1)
-      channel: (batchNumber % concurrency) + 1,
-      isDrainingBatch
-    }
+    {...p(streamie).currentMeta}
   ];
 
   if (useAggregate) handlerArgs.unshift(p(streamie).aggregate);
@@ -448,16 +469,7 @@ function _handleResolution(streamie, batch, error, result) {
 
   _updateMetrics(streamie, batch);
 
-  if (error) {
-    console.log('ERROR', error);
-    // Reject _advance promises.
-    batch.forEach(batchItem => batchItem.deferred.reject(error));
-
-    // Push emit an error from the output stream.
-    p(streamie).stream.emit('error', error);
-
-    return;
-  }
+  if (error) return _handleError(streamie, error);
 
   // Resolve/Reject _advance promises.
   batch.forEach(batchItem => batchItem.deferred.resolve(result));
@@ -482,6 +494,20 @@ function _handleResolution(streamie, batch, error, result) {
 
   // Push the result to the output stream.
   p(streamie).stream.push(useAggregate ? p(streamie).aggregate : output);
+}
+
+
+/**
+ *
+ */
+function _handleError(streamie, error) {
+  // Reject _advance promises.
+  // batch.forEach(batchItem => batchItem.deferred.reject(error));
+
+  //
+  p(streamie).children.forEach(childStreamie => childStreamie.error(error));
+
+  p(streamie).errorHandlers.forEach(errorHandler => errorHandler(error, {...(p(streamie).currentMeta || {})}));
 }
 
 
@@ -565,7 +591,7 @@ function _handleStreamInput(streamie, streamInput, streamCallback) {
   p(streamie).queues.backlogged.push({
     id: p(streamie).state.count.total++,
     streamInput,
-    streamCallback,
+    streamCallback, // This streamCallback, when called, allows the next item into the stream.
     backloggedAt: Date.now()
   });
 
