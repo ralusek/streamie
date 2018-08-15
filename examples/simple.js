@@ -13,13 +13,14 @@ const items = [
   {location: 'Buenos Aires'}
 ]
 
-source(items, (item) => {
+source(items, (item, { streamie }) => {
   console.log('Starting', item);
-
   return new Promise((resolve) => {
-    setTimeout(() => resolve(), Math.random() * 5000);
+    setTimeout(() => resolve(), Math.random() * 1000);
   })
   .then(() => {
     console.log('Done with', item);
+    if (item.location === 'Buenos Aires') streamie.complete('Final Value');
   });
-});
+})
+.then((value) => console.log('Streamie complete.', value));

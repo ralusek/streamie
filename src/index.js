@@ -3,7 +3,7 @@
 const EventEmitter = require('events');
 const Stream = require('stream');
 
-const utils = require('../utils');
+const utils = require('./utils');
 
 const functionalityTestStream = new Stream.Transform();
 
@@ -22,7 +22,7 @@ function p(object) {
 class Streamie {
   constructor(config = {}) {
     
-    p(this).name = config.name;
+    p(this).name = config.name || utils.string.generateId();
 
     // Handle configuration.
     p(this).config = {};
@@ -69,6 +69,8 @@ class Streamie {
     };
 
     p(this).handler = config.handler || (item => item);
+
+    p(this).errorHandlers = [];
 
     p(this).emitter = new EventEmitter();
 
@@ -133,6 +135,14 @@ class Streamie {
   /**
    *
    */
+  error(error) {
+    _handleError(this, error);
+    return this;
+  }
+
+  /**
+   *
+   */
   concat(inputs) {
     inputs.forEach(input => this.push(input));
     return this;
@@ -141,9 +151,10 @@ class Streamie {
   /**
    *
    */
-  complete() {
+  complete(finalValue) {
     if (!p(this).state.completing) {
       p(this).state.completing = true;
+      p(this).finalValue = finalValue;
 
       p(this).stream.cork()
     }
@@ -258,6 +269,14 @@ class Streamie {
   }
 
   /**
+   *
+   */
+  snatch(fn) {
+    p(this).errorHandlers.push(fn);
+    return this;
+  }
+
+  /**
    * Automatically source a new streamie based off of likely args.
    */
   static source(...args) {
@@ -361,12 +380,13 @@ function _handleNextBacklogged(streamie) {
 
   if (!advanced.length || !backlogged.length) return;
 
+  // Associate and "consume" an `advanced` queue item placeholder with a `backlogged` queueItem.
   const queueItem = Object.assign({}, advanced.shift(), backlogged.shift(), {activeAt: Date.now()});
 
+  // Push the current queueItem into the active queue.
   active.push(queueItem);
 
-  // _handleCurrentBatch(streamie);
-
+  // Calling the streamCallback allows for next item to be passed into the Transform stream.
   setTimeout(() => queueItem.streamCallback());
 }
 
@@ -403,15 +423,17 @@ function _handleCurrentBatch(streamie) {
 
   const batchNumber = ++p(streamie).state.count.batches;
 
+  p(streamie).currentMeta = {
+    streamie,
+    batchNumber,
+    // Round robin integer channel assignment between 1 and (conccurency + 1)
+    channel: (batchNumber % concurrency) + 1,
+    isDrainingBatch
+  };
+
   const handlerArgs = [
     batchSize === 1 ? inputs[0] : inputs,
-    {
-      streamie,
-      batchNumber,
-      // Round robin integer channel assignment between 1 and (conccurency + 1)
-      channel: (batchNumber % concurrency) + 1,
-      isDrainingBatch
-    }
+    {...p(streamie).currentMeta}
   ];
 
   if (useAggregate) handlerArgs.unshift(p(streamie).aggregate);
@@ -439,19 +461,17 @@ function _handleResolution(streamie, batch, error, result) {
   // TODO determine if there is a worthwhile distinction to allowing this to drain.
   if (p(streamie).state.stopped) return;
 
-  if (error) {
-    console.log('ERROR', error);
-    // TODO handle.
-    return;
-  }
 
   p(streamie).state.count.batchesHandled++;
   p(streamie).state.count.itemsHandled += batch.length;
 
   handling.delete(batch);
+
   _updateMetrics(streamie, batch);
 
-  // Resolve _advance promises.
+  if (error) return _handleError(streamie, error);
+
+  // Resolve/Reject _advance promises.
   batch.forEach(batchItem => batchItem.deferred.resolve(result));
 
   // If passThrough is true, we change the output to be the handler's input, rather than its
@@ -480,6 +500,20 @@ function _handleResolution(streamie, batch, error, result) {
 /**
  *
  */
+function _handleError(streamie, error) {
+  // Reject _advance promises.
+  // batch.forEach(batchItem => batchItem.deferred.reject(error));
+
+  //
+  p(streamie).children.forEach(childStreamie => childStreamie.error(error));
+
+  p(streamie).errorHandlers.forEach(errorHandler => errorHandler(error, {...(p(streamie).currentMeta || {})}));
+}
+
+
+/**
+ *
+ */
 function _updateMetrics(streamie, batch) {
   const { avgTimeHandling } = p(streamie).state.time;
   const timeHandling = Date.now() - batch.handlingAt;
@@ -499,8 +533,9 @@ function _handleCompletion(streamie) {
   if (backlogged.length || active.length || handling.size) return _refresh(streamie);
 
   p(streamie).state.completed = true;
-  p(streamie).promises.completed.deferred.resolve();
-  p(streamie).promises.done.deferred.resolve(p(streamie).aggregate);
+  const finalValue = p(streamie).finalValue !== undefined ? p(streamie).finalValue : p(streamie).aggregate;
+  p(streamie).promises.completed.deferred.resolve(finalValue);
+  p(streamie).promises.done.deferred.resolve(finalValue);
   
   // Signal completion to children.
   p(streamie).stream.push(null);
@@ -556,7 +591,7 @@ function _handleStreamInput(streamie, streamInput, streamCallback) {
   p(streamie).queues.backlogged.push({
     id: p(streamie).state.count.total++,
     streamInput,
-    streamCallback,
+    streamCallback, // This streamCallback, when called, allows the next item into the stream.
     backloggedAt: Date.now()
   });
 
