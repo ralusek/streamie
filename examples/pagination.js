@@ -21,7 +21,7 @@ source((page = 1, { streamie }) => {
       streamie.push(page + 1);
       return Array.isArray(results.row) ? results.row : [results.row];
     }
-    streamie.complete();
+    streamie.complete('All Done!');
   });
 })
 .filter(player => player.name_display_first_last.match(new RegExp(term, 'i')), { flatten: true })

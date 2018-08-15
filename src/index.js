@@ -540,7 +540,7 @@ function _handleCompletion(streamie) {
   // Signal completion to children.
   p(streamie).stream.push(null);
   _destroyStream(streamie);
-  // p(streamie).children.forEach(childStreamie => childStreamie.complete());
+  p(streamie).children.forEach(childStreamie => childStreamie.complete(finalValue));
 }
 
 
@@ -633,8 +633,8 @@ function _createStream(streamie) {
   };
 
   // Requires Node 8+
-  if (functionalityTestStream.destroy) config.final = (callback) => _handleFinalStreamInput(streamie, callback);
-  else config.flush = (callback) => _handleFinalStreamInput(streamie, callback);
+  // if (functionalityTestStream.destroy) config.final = (callback) => _handleFinalStreamInput(streamie, callback);
+  // else config.flush = (callback) => _handleFinalStreamInput(streamie, callback);
 
   const stream = new Stream.Transform(config);
 
