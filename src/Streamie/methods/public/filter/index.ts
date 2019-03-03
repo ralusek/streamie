@@ -2,7 +2,7 @@ import Streamie from "@root/Streamie";
 
 // Types
 import { P } from "@root/utils/namespace";
-import { Handler, Item, StreamiePrivateNamespace } from "@root/Streamie/types";
+import { Handler, Item, StreamiePrivateNamespace, HandlerUtilities } from "@root/Streamie/types";
 import { FilterConfig } from "./types";
 
 // Private Methods.
@@ -29,8 +29,8 @@ export default (
     ...streamieConfig
   }: FilterConfig
 ): Streamie => {
-  const child = new Streamie(async (item: Item, ...args) => {
-    const result = await Promise.resolve(handler(item, ...args));
+  const child = new Streamie(async (item: Item, utils: HandlerUtilities) => {
+    const result = await Promise.resolve(handler(item, utils));
     return predicate(result) !== false ? item : STREAMIE_SHOULD_OMIT;
   }, streamieConfig);
 

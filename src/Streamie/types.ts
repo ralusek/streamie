@@ -1,10 +1,12 @@
 import Streamie from './index';
 import StreamieState from './StreamieState';
+import Emittie from '@root/Emittie';
 
 /**
  * The private namespace for instances of Streamie.
  */
 export type StreamiePrivateNamespace = {
+  emittie: Emittie,
   handler: Handler,
   state: StreamieState,
   config: StreamieConfig

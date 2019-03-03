@@ -12,6 +12,7 @@ import filter from './methods/public/filter';
 import push from './methods/public/push';
 import map from './methods/public/map';
 import StreamieState from './StreamieState';
+import Emittie from '@root/Emittie';
 
 
 // Method for private namespacing.
@@ -26,13 +27,19 @@ export default class Streamie {
     handler:Handler,
     config?: StreamieConfig
   ) {
+    p(this).emittie = new Emittie();
+
     // Store references.
     p(this).handler = handler;
 
     // Create data containers.
-    p(this).state = new StreamieState();
+    p(this).state = new StreamieState(config);
 
-    p(this).config = {...config};
+    // Handle configuration.
+    p(this).config = {
+      ...config,
+      concurrency: config.concurrency || Infinity
+    };
   }
 
   /**
