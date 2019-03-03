@@ -18,7 +18,7 @@ export default (
   item:Item
 ): Promise<HandlerResult> => {
   const queueItem: QueueItem = new QueueItem(item);
-  p(self).queue.push(queueItem);
+  p(self).state.queue.push(queueItem);
 
   return queueItem.deferred.promise;
 }

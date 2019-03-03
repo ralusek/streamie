@@ -1,5 +1,6 @@
 // Types
 import { Handler, HandlerResult, Item, StreamieConfig, StreamiePrivateNamespace } from './types';
+import { StreamieStatePublic } from './StreamieState/types';
 import { MapConfig } from './methods/public/map/types';
 import { FilterConfig } from './methods/public/filter/types';
 
@@ -10,6 +11,7 @@ import namespace, { P } from '@root/utils/namespace';
 import filter from './methods/public/filter';
 import push from './methods/public/push';
 import map from './methods/public/map';
+import StreamieState from './StreamieState';
 
 
 // Method for private namespacing.
@@ -28,9 +30,17 @@ export default class Streamie {
     p(this).handler = handler;
 
     // Create data containers.
-    p(this).queue = []; // The QueueItems which have yet to be handled or are currently handling.
-    p(this).handling = new Set(); // The QueueItems being handled.
-    p(this).children = new Set(); // The downstream child Streamies
+    p(this).state = new StreamieState();
+
+    p(this).config = {...config};
+  }
+
+  /**
+   * Get the state in a publicly formatted structure.
+   * @returns The public state.
+   */
+  get state(): StreamieStatePublic {
+    return p(this).state.asPublic;
   }
 
   /**
@@ -48,7 +58,7 @@ export default class Streamie {
    * @param config - The configuration options
    * @returns The new child streamie.
    */
-  map (handler: Handler, config: MapConfig): Streamie {
+  map(handler: Handler, config: MapConfig): Streamie {
     return map(p, this, handler, config);
   };
 

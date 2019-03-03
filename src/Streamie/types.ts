@@ -1,14 +1,13 @@
 import Streamie from './index';
-import { QueueItem } from '@root/QueueItem';
+import StreamieState from './StreamieState';
 
 /**
  * The private namespace for instances of Streamie.
  */
 export type StreamiePrivateNamespace = {
   handler: Handler,
-  queue: Array<QueueItem>,
-  handling: Set<QueueItem>,
-  children: Set<Streamie>
+  state: StreamieState,
+  config: StreamieConfig
 };
 
 /**

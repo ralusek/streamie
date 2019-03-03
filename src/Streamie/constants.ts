@@ -1,4 +1,4 @@
 /**
  * Symbol indicating that a stream should omit the returned value.
  */
-export const STREAMIE_SHOULD_OMIT = Symbol();
+export const STREAMIE_SHOULD_OMIT = Symbol.for('STREAMIE_SHOULD_OMIT');
