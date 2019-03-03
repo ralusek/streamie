@@ -25,6 +25,11 @@ export class QueueItem {
     p(this).deferred = defer();
   }
 
+  /**
+   * The deferred value to be resolved when the QueueItem has completed
+   * handling.
+   * @returns The DeferredWithPromise
+   */
   get deferred():DeferredWithPromise {
     return p(this).deferred;
   }

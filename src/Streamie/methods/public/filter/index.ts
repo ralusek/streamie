@@ -20,10 +20,15 @@ import { STREAMIE_SHOULD_OMIT } from "@root/Streamie/constants";
  * @param config - The configuration options
  * @returns The new child streamie.
  */
-export default (p:P<Streamie, StreamiePrivateNamespace>, self:Streamie, handler:Handler, {
-  predicate = (test: any):boolean => !!test,
-  ...streamieConfig
-}: FilterConfig): Streamie => {
+export default (
+  p: P<Streamie, StreamiePrivateNamespace>,
+  self: Streamie,
+  handler: Handler,
+  {
+    predicate = (test: any):boolean => !!test,
+    ...streamieConfig
+  }: FilterConfig
+): Streamie => {
   const child = new Streamie(async (item: Item, ...args) => {
     const result = await Promise.resolve(handler(item, ...args));
     return predicate(result) !== false ? item : STREAMIE_SHOULD_OMIT;
