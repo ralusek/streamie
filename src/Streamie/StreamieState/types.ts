@@ -1,6 +1,4 @@
 // Types
-import { QueueItem } from "@root/QueueItem";
-import Streamie from "@root/Streamie";
 import { StreamieConfig } from "@root/Streamie/types";
 
 /**

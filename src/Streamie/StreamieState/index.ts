@@ -1,14 +1,16 @@
 // Types
 import Streamie from "@root/Streamie";
 import { StreamieConfig } from "@root/Streamie/types";
-import { QueueItem } from "@root/QueueItem";
 import { StreamieStatePublic, StreamieStatePrivateNamespace } from "./types";
+import { StreamieQueue } from "../StreamieQueue";
 
 // Utils
 import namespace, { P } from '@root/utils/namespace';
 
 // Private Methods
 import _isChildBlocking from "./methods/private/_isChildBlocking";
+import { StreamieQueueItem } from "../StreamieQueue/types";
+
 
 // Method for private namespacing.
 const p: P<StreamieState, StreamieStatePrivateNamespace> = namespace();
@@ -21,12 +23,12 @@ export default class StreamieState {
   /**
    * The QueueItems which have yet to be handled or are currently handling.
    */
-  public queue: QueueItem[];
+  public queue: StreamieQueue;
 
   /**
    * The QueueItems being handled.
    */
-  public handling: Set<QueueItem>;
+  public handling: Set<StreamieQueueItem>;
 
   /**
    * The downstream child Streamies.
@@ -36,8 +38,8 @@ export default class StreamieState {
   constructor(config: StreamieConfig) {
     p(this).config = config;
 
-    this.queue = []; // The QueueItems which have yet to be handled or are currently handling
-    this.handling = new Set(); // The QueueItems being handled
+    this.queue = new StreamieQueue(); // The items which have yet to be handled or are currently handling
+    this.handling = new Set(); // The StreamieQueueItems being handled
     this.children = new Set(); // The downstream child Streamies
   }
 

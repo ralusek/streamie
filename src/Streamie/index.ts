@@ -17,6 +17,9 @@ import filter from './methods/public/filter';
 import push from './methods/public/push';
 import map from './methods/public/map';
 
+// Event Names
+import * as EVENT_NAMES from './events/constants';
+
 
 // Method for private namespacing.
 const p: P<Streamie, StreamiePrivateNamespace> = namespace();
@@ -54,11 +57,19 @@ export default class Streamie {
   }
 
   /**
+   * Reference to Event constants.
+   * @returns Event constants
+   */
+  get EVENT(): { [key: string]: EventName } {
+    return EVENT_NAMES;
+  }
+
+  /**
    * Register an event listener for public events.
    * @param eventName - The event name for whic to register a callback
    * @param callback - The callback to invoke on event emitted
    */
-  on(eventName: EventName, callback: EventCallback) {
+  on(eventName: EventName, callback: Item) {
     return p(this).emittie.on(eventName, callback);
   }
 

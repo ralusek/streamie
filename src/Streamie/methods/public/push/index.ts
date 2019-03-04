@@ -1,6 +1,5 @@
 // Types
 import { Item, HandlerResult, StreamiePrivateNamespace } from "@root/Streamie/types";
-import { QueueItem } from "@root/QueueItem";
 import { P } from "@root/utils/namespace";
 import Streamie from "@root/Streamie";
 import { ITEM_PUSHED } from "@root/Streamie/events/constants";
@@ -18,10 +17,9 @@ export default (
   self:Streamie,
   item:Item
 ): Promise<HandlerResult> => {
-  const queueItem: QueueItem = new QueueItem(item);
-  p(self).state.queue.push(queueItem);
+  const queueItem = p(self).state.queue.push(item);
 
-  p(self).emittie.emit(ITEM_PUSHED, queueItem);
+  p(self).emittie.emit(ITEM_PUSHED);
 
-  return queueItem.deferred.promise;
+  return queueItem.deferredHandler.promise;
 }

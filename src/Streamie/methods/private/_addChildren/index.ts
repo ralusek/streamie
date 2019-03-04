@@ -1,6 +1,10 @@
+// Types
 import { P } from "@root/utils/namespace";
 import Streamie from "@root/Streamie";
 import { StreamiePrivateNamespace } from "@root/Streamie/types";
+
+// Events
+import { CONCURRENT_CAPACITY_REACHED, CHILD_CONCURRENT_CAPACITY_REACHED } from "@root/Streamie/events/constants";
 
 /**
  * Add child stream to streamie.
@@ -26,5 +30,5 @@ function _bootstrapEventListeners(
   self: Streamie,
   child: Streamie
 ): void {
-
+  child.on(CONCURRENT_CAPACITY_REACHED, () => p(self).emittie.emit(CHILD_CONCURRENT_CAPACITY_REACHED));
 }
