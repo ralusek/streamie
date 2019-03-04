@@ -4,7 +4,14 @@ import Streamie from "@root/Streamie";
 import { StreamiePrivateNamespace } from "@root/Streamie/types";
 
 // Events
-import { CONCURRENT_CAPACITY_REACHED, CHILD_CONCURRENT_CAPACITY_REACHED } from "@root/Streamie/events/constants";
+import {
+  ITEM_HANDLED,
+  CHILD_ITEM_HANDLED,
+  ITEM_PUSHED,
+  CHILD_ITEM_PUSHED,
+  PAUSED,
+  CHILD_PAUSED
+} from "@root/Streamie/events/constants";
 
 /**
  * Add child stream to streamie.
@@ -12,7 +19,11 @@ import { CONCURRENT_CAPACITY_REACHED, CHILD_CONCURRENT_CAPACITY_REACHED } from "
  * @param self - The Streamie instance
  * @param child - The Streamie to add as a child
  */
-export default (p:P<Streamie, StreamiePrivateNamespace>, self:Streamie, child:Streamie) => {
+export default (
+  p:P<Streamie, StreamiePrivateNamespace>,
+  self:Streamie,
+  child:Streamie
+): void => {
   _bootstrapEventListeners(p, self, child);
 
   p(this).state.children.add(child);
@@ -30,5 +41,7 @@ function _bootstrapEventListeners(
   self: Streamie,
   child: Streamie
 ): void {
-  child.on(CONCURRENT_CAPACITY_REACHED, () => p(self).emittie.emit(CHILD_CONCURRENT_CAPACITY_REACHED));
+  child.on(PAUSED, () => p(self).emittie.emit(CHILD_PAUSED));
+  child.on(ITEM_PUSHED, () => p(self).emittie.emit(CHILD_ITEM_PUSHED));
+  child.on(ITEM_HANDLED, () => p(self).emittie.emit(CHILD_ITEM_HANDLED));
 }

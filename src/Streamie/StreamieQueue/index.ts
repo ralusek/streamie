@@ -72,7 +72,7 @@ export class StreamieQueue {
    * Attempts to shift an item off the head of the queue O(1)
    * @returns StreamieQueueItem if the shift was possible/allowed.
    */
-  shift(): StreamieQueueItem | void {
+  shift(): StreamieQueueItem | undefined {
     const existing: StreamieQueueItemContainer = p(this).head;
     if (!existing) return; // No queue items, empty shift.
 

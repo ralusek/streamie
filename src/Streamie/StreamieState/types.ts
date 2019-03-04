@@ -13,9 +13,13 @@ export type StreamieStatePrivateNamespace = {
  */
 export type StreamieStatePublic = {
   count: {
+    /** The number of items currently queued, including those being handled. */
     queued: number,
+    /** The number of items currently being handled. */
     handling: number,
   },
+  maxConcurrency: number,
   isAtConcurrentCapacity: boolean,
   isBlocked: boolean,
+  isPaused: boolean
 }

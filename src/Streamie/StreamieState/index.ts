@@ -21,6 +21,11 @@ const p: P<StreamieState, StreamieStatePrivateNamespace> = namespace();
  */
 export default class StreamieState {
   /**
+   * Whether or not the stream is paused.
+   */
+  public paused: boolean;
+
+  /**
    * The QueueItems which have yet to be handled or are currently handling.
    */
   public queue: StreamieQueue;
@@ -38,6 +43,8 @@ export default class StreamieState {
   constructor(config: StreamieConfig) {
     p(this).config = config;
 
+    this.paused = false;
+
     this.queue = new StreamieQueue(); // The items which have yet to be handled or are currently handling
     this.handling = new Set(); // The StreamieQueueItems being handled
     this.children = new Set(); // The downstream child Streamies
@@ -47,15 +54,17 @@ export default class StreamieState {
    * Retrieve StreamieState in a publicly digestible format.
    * @returns The public state
    */
-  get asPublic(): StreamieStatePublic {
-    const state: any = {
+  get readable(): StreamieStatePublic {
+    const state: StreamieStatePublic | any = {
       count: {
         queued: this.queue.length,
-        handling: this.handling.size
-      }
+        handling: this.handling.size,
+      },
+      maxConcurrency: p(this).config.concurrency,
+      isPaused: this.paused,
     };
 
-    state.isAtConcurrentCapacity = this.handling.size === p(this).config.concurrency;
+    state.isAtConcurrentCapacity = state.count.handling === state.maxConcurrency;
 
     state.isBlocked = state.isAtConcurrentCapacity || _isChildBlocking(this.children);
 
