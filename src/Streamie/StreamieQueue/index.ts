@@ -20,7 +20,7 @@ const p: P<StreamieQueue, StreamieQueuePrivateNamespace> = namespace();
  * A linked-list implementation of a queue for O(1) push and shift.
  */
 export class StreamieQueue {
-  constructor({canAutoAdvance = false}: StreamieQueueConfig = {}) {
+  constructor({canAutoAdvance = true}: StreamieQueueConfig = {}) {
     p(this).head;
     p(this).tail;
     p(this).canAutoAdvance = canAutoAdvance;

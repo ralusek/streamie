@@ -3,7 +3,7 @@ import { Handler, HandlerResult, Item, StreamieConfig, StreamiePrivateNamespace 
 import { StreamieStatePublic } from './StreamieState/types';
 import { MapConfig } from './methods/public/map/types';
 import { FilterConfig } from './methods/public/filter/types';
-import { EventName, EventCallback } from '@root/Emittie/types';
+import { EventName } from '@root/Emittie/types';
 
 // Utils
 import namespace, { P } from '@root/utils/namespace';
@@ -19,6 +19,9 @@ import map from './methods/public/map';
 
 // Event Names
 import * as EVENT_NAMES from './events/constants';
+
+// Event Handlers
+import bootstrapEventHandlers from './events/bootstrapEventHandlers/streamie';
 
 
 // Method for private namespacing.
@@ -46,6 +49,9 @@ export default class Streamie {
       ...config,
       concurrency: config.concurrency || Infinity
     };
+
+    // Bootstrap event listeners
+    bootstrapEventHandlers(p, this);
   }
 
   /**
@@ -53,7 +59,7 @@ export default class Streamie {
    * @returns The public state.
    */
   get state(): StreamieStatePublic {
-    return p(this).state.asPublic;
+    return p(this).state.readable;
   }
 
   /**

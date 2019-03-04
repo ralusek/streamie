@@ -6,27 +6,15 @@ import { DeferredWithPromise } from "@root/utils/defer";
  * The private namespace for instances of StreamieQueue
  */
 export type StreamieQueuePrivateNamespace = {
-  /**
-   * The first item in the queue. Will be replaced by the next item in the event
-   * of a .shift()
-   */
+  /** The first item in the queue. Will be replaced by the next item in the event of a .shift() */
   head?: StreamieQueueItemContainer,
-  /**
-   * The last item in the queue. Will be replaced by a new item in the event of
-   * a .push()
-   */
+  /** The last item in the queue. Will be replaced by a new item in the event of a .push() */
   tail?: StreamieQueueItemContainer,
-  /**
-   * The length of the queue.
-   */
+  /** The length of the queue. */
   length: number,
-  /**
-   * Whether or not the item should automatically advance.
-   */
+  /** Whether or not the item should automatically advance. */
   canAutoAdvance: boolean,
-  /**
-   * The amount of queue items permitted to be shifted out of the queue.
-   */
+  /** The amount of queue items permitted to be shifted out of the queue. */
   itemsPermittedToAdvance: number
 };
 

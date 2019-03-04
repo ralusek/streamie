@@ -6,6 +6,12 @@ import { StreamieConfig } from "@root/Streamie/types";
  */
 export type StreamieStatePrivateNamespace = {
   config: StreamieConfig,
+  /** Whether or not the stream is paused. */
+  isPaused: boolean,
+  /** Whether or not the stream is completed. */
+  isCompleted: boolean,
+  /** Whether or not the stream is stopped. */
+  isStopped: boolean
 };
 
 /**

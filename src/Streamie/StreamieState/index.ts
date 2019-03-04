@@ -20,30 +20,21 @@ const p: P<StreamieState, StreamieStatePrivateNamespace> = namespace();
  * The state, related logic, and getters, for an associated Streamie.
  */
 export default class StreamieState {
-  /**
-   * Whether or not the stream is paused.
-   */
-  public paused: boolean;
-
-  /**
-   * The QueueItems which have yet to be handled or are currently handling.
-   */
+ /** The QueueItems which have yet to be handled or are currently handling. */
   public queue: StreamieQueue;
 
-  /**
-   * The QueueItems being handled.
-   */
+  /** The QueueItems being handled. */
   public handling: Set<StreamieQueueItem>;
 
-  /**
-   * The downstream child Streamies.
-   */
+  /** The downstream child Streamies.*/
   public children: Set<Streamie>;
 
   constructor(config: StreamieConfig) {
     p(this).config = config;
 
-    this.paused = false;
+    p(this).isPaused = false;
+    p(this).isStopped = false;
+    p(this).isCompleted = false;
 
     this.queue = new StreamieQueue(); // The items which have yet to be handled or are currently handling
     this.handling = new Set(); // The StreamieQueueItems being handled
@@ -61,13 +52,43 @@ export default class StreamieState {
         handling: this.handling.size,
       },
       maxConcurrency: p(this).config.concurrency,
-      isPaused: this.paused,
+      isPaused: p(this).isPaused,
+      isStopped: p(this).isStopped,
+      isCompleted: p(this).isCompleted
     };
 
     state.isAtConcurrentCapacity = state.count.handling === state.maxConcurrency;
 
-    state.isBlocked = state.isAtConcurrentCapacity || _isChildBlocking(this.children);
+    state.isBlocked = state.isPaused ||
+                      state.isStopped ||
+                      state.isCompleted ||
+                      state.isAtConcurrentCapacity ||
+                      _isChildBlocking(this.children);
 
     return state;
+  }
+
+  /**
+   * Toggles the isPaused value of the streamie if no value is provided, else sets it to
+   * the provided value.
+   * @param value - The optional value to set the pause. Toggles value if undefined.
+   * @returns - The value that isPaused was set to.
+   */
+  pause(value?: boolean): boolean {
+    return p(this).isPaused = value !== undefined ? !!value : !p(this).isPaused;
+  }
+
+  /**
+   * Sets isStopped to true.
+   */
+  stop(): void {
+    p(this).isStopped = true;
+  }
+
+  /**
+   * Sets isCompleted to true.
+   */
+  complete(): void {
+    p(this).isCompleted = true;
   }
 }
