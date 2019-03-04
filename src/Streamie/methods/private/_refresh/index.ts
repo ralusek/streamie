@@ -7,6 +7,9 @@ import _handleQueueItem from "../_handleQueueItem";
 
 /**
  * Refreshes activity of the stream.
+ * TODO consider adding a mechanism to bunch multiple refresh attempts in the same
+ * tick together. Alternatively, a mechanism to return a "refresh id" prior to
+ * doing something, and only refreshing if that refresh id hasn't changed (i.e. hasn't invoked)
  * @param p - The private namespace getter
  * @param self - The Streamie instance
  */

@@ -19,5 +19,5 @@ export default (
 ): void => {
   bootstrapChildEventHandlers(p, self, child);
 
-  p(this).state.children.add(child);
+  p(self).state.children.add(child);
 };
