@@ -3,16 +3,19 @@ import { Handler, HandlerResult, Item, StreamieConfig, StreamiePrivateNamespace 
 import { StreamieStatePublic } from './StreamieState/types';
 import { MapConfig } from './methods/public/map/types';
 import { FilterConfig } from './methods/public/filter/types';
+import { EventName, EventCallback } from '@root/Emittie/types';
 
 // Utils
 import namespace, { P } from '@root/utils/namespace';
+
+// Classes
+import StreamieState from './StreamieState';
+import Emittie from '@root/Emittie';
 
 // Public Methods
 import filter from './methods/public/filter';
 import push from './methods/public/push';
 import map from './methods/public/map';
-import StreamieState from './StreamieState';
-import Emittie from '@root/Emittie';
 
 
 // Method for private namespacing.
@@ -25,7 +28,7 @@ const p: P<Streamie, StreamiePrivateNamespace> = namespace();
 export default class Streamie {
   constructor(
     handler:Handler,
-    config?: StreamieConfig
+    config: StreamieConfig = {}
   ) {
     p(this).emittie = new Emittie();
 
@@ -48,6 +51,15 @@ export default class Streamie {
    */
   get state(): StreamieStatePublic {
     return p(this).state.asPublic;
+  }
+
+  /**
+   * Register an event listener for public events.
+   * @param eventName - The event name for whic to register a callback
+   * @param callback - The callback to invoke on event emitted
+   */
+  on(eventName: EventName, callback: EventCallback) {
+    return p(this).emittie.on(eventName, callback);
   }
 
   /**

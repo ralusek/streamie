@@ -12,7 +12,7 @@ export type EmittieCallbackSets = {
 /**
  * Event name, for which it callbacks are registered and events are emitted.
  */
-export type EventName = string;
+export type EventName = string | Symbol;
 
 /**
  * A callback registered for a given EventName, and invoked on emit with EventPayloads.
