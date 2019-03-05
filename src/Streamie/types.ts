@@ -18,7 +18,19 @@ export type StreamiePrivateNamespace = {
 export type StreamieConfig = {
   concurrency?: number,
   flatten?: boolean,
-  batchSize?: number
+  batchSize?: number,
+  /**
+   * Whether or not streamie should continue handling until _all_ children have
+   * saturated backlogs, as opposed to _any_ children.
+   */
+  shouldSaturateChildren?: boolean,
+  /** The multiplier from concurrency used to determine the maxBacklogLength if none provided. */
+  maxBacklogFromConcurrency?: number,
+  /**
+   * The maximum the queue length is allowed to get before upstream parents will
+   * stop
+   * */
+  maxBacklogLength?: number
 };
 
 /**

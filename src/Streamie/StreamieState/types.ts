@@ -30,7 +30,10 @@ export type StreamieStatePublic = {
     handling: number,
   },
   maxConcurrency: number,
+  maxBacklogLength: number,
   isAtConcurrentCapacity: boolean,
-  isBlocked: boolean,
-  isPaused: boolean
+  isAtBacklogCapacity: boolean,
+  isPaused: boolean,
+  canHandle: boolean,
+  canPushToChildren: boolean
 }

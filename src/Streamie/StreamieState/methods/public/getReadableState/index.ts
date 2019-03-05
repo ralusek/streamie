@@ -4,11 +4,14 @@ import { P } from "@root/utils/namespace";
 import StreamieState from "@root/Streamie/StreamieState";
 
 // Private Methods
-import _isChildBlocking from "../../private/_isChildBlocking";
+import _canPushToChildren from "../../private/_canPushToChildren";
 
 
 /**
  * Retrieve StreamieState in a publicly digestible format.
+ * TODO: Memoize as much as possible
+ * @param p - The private namespace getter
+ * @param self - The Streamie instance
  * @returns The public state
  */
 export default (
@@ -28,14 +31,20 @@ export default (
     isCompleted: p(self).isCompleted
   };
 
-  state.isAtConcurrentCapacity = state.count.handling === state.maxConcurrency;
+  state.maxBacklogLength = p(self).config.maxBacklogLength ||
+                           (p(self).config.maxBacklogFromConcurrency * state.maxConcurrency);
 
-  state.isBlocked = state.isPaused ||
-    state.isStopped ||
-    state.isCompleting ||
-    state.isCompleted ||
+  state.isAtConcurrentCapacity = state.count.handling === state.maxConcurrency;
+  state.isAtBacklogCapacity = state.count.queued >= state.maxBacklogLength;
+  state.canPushToChildren = _canPushToChildren(p, self);
+
+  state.canHandle = !(
     state.isAtConcurrentCapacity ||
-    _isChildBlocking(self.children);
+    state.isPaused ||
+    state.isStopped ||
+    state.isCompleted ||
+    !state.canPushToChildren
+  );
 
   return state;
 }

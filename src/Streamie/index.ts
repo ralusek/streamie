@@ -42,15 +42,18 @@ export default class Streamie {
     // Store references.
     p(this).handler = handler;
 
-    // Create data containers.
-    p(this).state = new StreamieState(config);
-
     // Handle configuration.
     p(this).config = {
       ...config,
       concurrency: config.concurrency || Infinity,
       batchSize: config.batchSize || 1,
+      shouldSaturateChildren: config.shouldSaturateChildren || true,
+      maxBacklogFromConcurrency: config.maxBacklogFromConcurrency || 3 // 3 times concurrency
     };
+
+    // Create data containers.
+    p(this).state = new StreamieState(p(this).config);
+
 
     // Bootstrap event listeners
     bootstrapEventHandlers(p, this);

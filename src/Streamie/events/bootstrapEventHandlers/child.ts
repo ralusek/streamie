@@ -1,15 +1,24 @@
 import Streamie from "@root/Streamie";
 import { P } from "@root/utils/namespace";
 import { StreamiePrivateNamespace } from "@root/Streamie/types";
+import { EventHandler } from "../types";
+import { EventName } from "@root/Emittie/types";
+
+// Private Methods
+import _refresh from "@root/Streamie/methods/private/_refresh";
+
 // Events
 import {
-  ITEM_HANDLED,
-  CHILD_ITEM_HANDLED,
-  ITEM_PUSHED,
-  CHILD_ITEM_PUSHED,
-  PAUSED,
-  CHILD_PAUSED
+  RESUMED
 } from "../constants";
+
+
+// Establish Event Handlers
+const HANDLER: Map<EventName, EventHandler> = new Map();
+
+/** Handle streamie item pushed */
+HANDLER.set(RESUMED, (p, self) => _refresh(p, self));
+
 
 /**
  * Bootstrap child event listeners.
@@ -23,7 +32,5 @@ export default (
   self: Streamie,
   child: Streamie
 ): void => {
-  child.on(PAUSED, () => p(self).emittie.emit(CHILD_PAUSED));
-  child.on(ITEM_PUSHED, () => p(self).emittie.emit(CHILD_ITEM_PUSHED));
-  child.on(ITEM_HANDLED, () => p(self).emittie.emit(CHILD_ITEM_HANDLED));
+  child.on(RESUMED, () => HANDLER.get(RESUMED)(p, self));
 };

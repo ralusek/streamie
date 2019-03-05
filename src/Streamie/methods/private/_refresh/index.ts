@@ -14,7 +14,7 @@ import _handleQueueItem from "../_handleQueueItem";
  * @param self - The Streamie instance
  */
 export default (p:P<Streamie, StreamiePrivateNamespace>, self: Streamie): void => {
-  if (p(self).state.readable.isBlocked) return; // Exit refresh attempt if blocked.
+  if (!p(self).state.readable.canHandle) return; // Exit refresh attempt if blocked.
 
   // Attempt to pull item off of queue, if available/allowed.
   const next: StreamieQueueItem = p(self).state.queue.shift();
