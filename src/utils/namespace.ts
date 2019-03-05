@@ -10,10 +10,10 @@ export type P<Instance extends object, PrivateNamespace> = (self: Instance) => P
  * Returns a getter capable of creating private namespaces.
  * @returns - The getter for private namespaces.
  */
-export default <Instance extends object, PrivateNamespace>(): P<Instance, PrivateNamespace> => {
-  const namespace:WeakMap<Instance, PrivateNamespace | any> = new WeakMap();
+export default (): any => {
+  const namespace:WeakMap<any, any> = new WeakMap();
 
-  return (self: Instance): PrivateNamespace => {
+  return <Instance, PrivateNamespace>(self: Instance): PrivateNamespace => {
     if (!namespace.has(self)) namespace.set(self, {});
     return namespace.get(self);
   }
