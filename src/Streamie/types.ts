@@ -16,7 +16,9 @@ export type StreamiePrivateNamespace = {
  * The configuration object to be passed to the Streamie constructor.
  */
 export type StreamieConfig = {
-  concurrency?: number
+  concurrency?: number,
+  flatten?: boolean,
+  batchSize?: number
 };
 
 /**

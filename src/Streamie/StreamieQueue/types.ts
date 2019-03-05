@@ -15,14 +15,17 @@ export type StreamieQueuePrivateNamespace = {
   /** Whether or not the item should automatically advance. */
   canAutoAdvance: boolean,
   /** The amount of queue items permitted to be shifted out of the queue. */
-  itemsPermittedToAdvance: number
+  itemsPermittedToAdvance: number,
+  /** The batch size of a shift. */
+  batchSize: number,
 };
 
 /**
  * The constructor configuration for StreamieQueueConfig.
  */
 export type StreamieQueueConfig = {
-  canAutoAdvance?: boolean
+  canAutoAdvance?: boolean,
+  batchSize?: number,
 };
 
 /**

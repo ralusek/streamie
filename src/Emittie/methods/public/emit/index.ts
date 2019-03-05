@@ -1,5 +1,5 @@
 // Types
-import { EventName, EventPayload, EventCallback, EmittiePrivateNamespace } from "@root/Emittie/types";
+import { EventName, EventPayload, EventCallback, EmittiePrivateNamespace, EventCallbackWithEventName } from "@root/Emittie/types";
 import { P } from "@root/utils/namespace";
 import Emittie from "@root/Emittie";
 
@@ -12,11 +12,14 @@ import Emittie from "@root/Emittie";
  * @param payloads - The EventPayload(s) with which to invoke the associated callbacks
  */
 export default (
-  p:P<Emittie, EmittiePrivateNamespace>,
-  self:Emittie,
-  name:EventName,
+  p: P<Emittie, EmittiePrivateNamespace>,
+  self: Emittie,
+  name: EventName,
   ...payloads: EventPayload[]
 ): void => {
-  const callbacks = p(self).callbacks.on.get(name);
-  if (callbacks) callbacks.forEach((callback: EventCallback) => callback(...payloads));
+  const onCallbacks = p(self).callbacks.on.get(name);
+  if (onCallbacks) onCallbacks.forEach((callback: EventCallback) => callback(...payloads));
+
+  const onAnyCallbacks = p(self).callbacks.onAny;
+  onAnyCallbacks.forEach((callback: EventCallbackWithEventName) => callback(name, ...payloads));
 };

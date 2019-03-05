@@ -1,6 +1,6 @@
 // Types
 import Emittie from "@root/Emittie";
-import { EventCallback, EventName, EmittiePrivateNamespace } from "@root/Emittie/types";
+import { EventCallback, EventName, EmittiePrivateNamespace, EventCallbackWithEventName } from "@root/Emittie/types";
 import { P } from "@root/utils/namespace";
 
 // Private Methods
@@ -8,17 +8,15 @@ import _addOnCallback from "../../private/_addOnCallback";
 
 
 /**
- * Associates a callback with a given event name.
+ * Associates a callback with all events.
  * @param p - The private namespace getter
  * @param self - The Emittie instance
- * @param name - The EventName to register the callback for
  * @param callback - The EventCallback to associate with the EventName
  */
 export default (
   p: P<Emittie, EmittiePrivateNamespace>,
   self: Emittie,
-  name: EventName,
-  callback: EventCallback
+  callback: EventCallbackWithEventName
 ): void => {
-  _addOnCallback(p, self, name, callback);
+  p(self).callbacks.onAny.push(callback);
 };

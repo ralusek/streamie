@@ -6,7 +6,10 @@ export type EmittiePrivateNamespace = {
 };
 
 export type EmittieCallbackSets = {
-  on: Map<EventName, EventCallback[]>
+  /** The event callbacks associated with a specific event name. */
+  on: Map<EventName, EventCallback[]>,
+  /** The event callbacks that will trigger on any event. */
+  onAny: EventCallbackWithEventName[]
 };
 
 /**
@@ -18,6 +21,11 @@ export type EventName = string | Symbol;
  * A callback registered for a given EventName, and invoked on emit with EventPayloads.
  */
 export type EventCallback = (...payloads: EventPayload[]) => void;
+
+/**
+ * A callback registered and invoked on emit with the EventName, and EventPayloads.
+ */
+export type EventCallbackWithEventName = (eventName: EventName, ...payloads: EventPayload[]) => void;
 
 /**
  * The value with which an event will be emitted.

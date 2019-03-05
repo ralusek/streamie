@@ -1,17 +1,22 @@
 // Types
 import { StreamieConfig } from "@root/Streamie/types";
+import Emittie from "@root/Emittie";
 
 /**
  * The private namespace for instances of StreamieState.
  */
 export type StreamieStatePrivateNamespace = {
   config: StreamieConfig,
+  /** The event emitter. */
+  emittie: Emittie,
   /** Whether or not the stream is paused. */
   isPaused: boolean,
+  /** Whether or not the stream is stopped. */
+  isStopped: boolean,
+  /** Whether or not the stream is handling its final items */
+  isCompleting: boolean,
   /** Whether or not the stream is completed. */
   isCompleted: boolean,
-  /** Whether or not the stream is stopped. */
-  isStopped: boolean
 };
 
 /**

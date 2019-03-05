@@ -13,12 +13,10 @@ import { EventName, EventCallback, EmittiePrivateNamespace, EmittieCallbackSets 
 export default (
   p: P<Emittie, EmittiePrivateNamespace>,
   self: Emittie,
-  callbackSet: (keyof EmittieCallbackSets),
   name: EventName,
-  callback: EventCallback
+  callback: EventCallback,
 ): void => {
-  if (!p(self).callbacks[callbackSet]) p(self).callbacks[callbackSet] = new Map();
-  const callbackSets = p(self).callbacks[callbackSet];
+  const callbackSets = p(self).callbacks.on;
   if (!callbackSets.has(name)) callbackSets.set(name, []);
   callbackSets.get(name).push(callback);
 };

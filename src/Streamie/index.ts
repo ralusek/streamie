@@ -3,7 +3,7 @@ import { Handler, HandlerResult, Item, StreamieConfig, StreamiePrivateNamespace 
 import { StreamieStatePublic } from './StreamieState/types';
 import { MapConfig } from './methods/public/map/types';
 import { FilterConfig } from './methods/public/filter/types';
-import { EventName } from '@root/Emittie/types';
+import { EventName, EventCallback, EventCallbackWithEventName } from '@root/Emittie/types';
 
 // Utils
 import namespace, { P } from '@root/utils/namespace';
@@ -22,6 +22,7 @@ import * as EVENT_NAMES from './events/constants';
 
 // Event Handlers
 import bootstrapEventHandlers from './events/bootstrapEventHandlers/streamie';
+import bootstrapStateEventHandlers from './events/bootstrapEventHandlers/state';
 
 
 // Method for private namespacing.
@@ -47,11 +48,13 @@ export default class Streamie {
     // Handle configuration.
     p(this).config = {
       ...config,
-      concurrency: config.concurrency || Infinity
+      concurrency: config.concurrency || Infinity,
+      batchSize: config.batchSize || 1,
     };
 
     // Bootstrap event listeners
     bootstrapEventHandlers(p, this);
+    bootstrapStateEventHandlers(p, this);
   }
 
   /**
@@ -71,12 +74,20 @@ export default class Streamie {
   }
 
   /**
-   * Register an event listener for public events.
+   * Register an event listener for public events by event name.
    * @param eventName - The event name for whic to register a callback
    * @param callback - The callback to invoke on event emitted
    */
-  on(eventName: EventName, callback: Item) {
+  on(eventName: EventName, callback: EventCallback) {
     return p(this).emittie.on(eventName, callback);
+  }
+
+  /**
+   * Register an event listener for all events.
+   * @param callback - The callback to invoke on event emitted
+   */
+  onAny(callback: EventCallbackWithEventName) {
+    return p(this).emittie.onAny(callback);
   }
 
   /**

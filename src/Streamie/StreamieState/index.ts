@@ -1,15 +1,20 @@
 // Types
 import Streamie from "@root/Streamie";
+import Emittie from "@root/Emittie";
 import { StreamieConfig } from "@root/Streamie/types";
 import { StreamieStatePublic, StreamieStatePrivateNamespace } from "./types";
 import { StreamieQueue } from "../StreamieQueue";
+import { StreamieQueueItem } from "../StreamieQueue/types";
 
 // Utils
 import namespace, { P } from '@root/utils/namespace';
 
-// Private Methods
-import _isChildBlocking from "./methods/private/_isChildBlocking";
-import { StreamieQueueItem } from "../StreamieQueue/types";
+// Public Methods
+import getReadableState from "./methods/public/getReadableState";
+
+// Event Names
+import { COMPLETING, COMPLETED, PAUSED, RESUMED } from "./events/constants";
+import { EventName, EventCallbackWithEventName } from "@root/Emittie/types";
 
 
 // Method for private namespacing.
@@ -30,10 +35,12 @@ export default class StreamieState {
   public children: Set<Streamie>;
 
   constructor(config: StreamieConfig) {
+    p(this).emittie = new Emittie();
     p(this).config = config;
 
     p(this).isPaused = false;
     p(this).isStopped = false;
+    p(this).isCompleting = false;
     p(this).isCompleted = false;
 
     this.queue = new StreamieQueue(); // The items which have yet to be handled or are currently handling
@@ -46,26 +53,15 @@ export default class StreamieState {
    * @returns The public state
    */
   get readable(): StreamieStatePublic {
-    const state: StreamieStatePublic | any = {
-      count: {
-        queued: this.queue.length,
-        handling: this.handling.size,
-      },
-      maxConcurrency: p(this).config.concurrency,
-      isPaused: p(this).isPaused,
-      isStopped: p(this).isStopped,
-      isCompleted: p(this).isCompleted
-    };
+    return getReadableState(p, this);
+  }
 
-    state.isAtConcurrentCapacity = state.count.handling === state.maxConcurrency;
-
-    state.isBlocked = state.isPaused ||
-                      state.isStopped ||
-                      state.isCompleted ||
-                      state.isAtConcurrentCapacity ||
-                      _isChildBlocking(this.children);
-
-    return state;
+  /**
+   * Register an event listener for events.
+   * @param callback - The callback to invoke on event emitted
+   */
+  onAny(callback: EventCallbackWithEventName) {
+    return p(this).emittie.onAny(callback);
   }
 
   /**
@@ -75,20 +71,45 @@ export default class StreamieState {
    * @returns - The value that isPaused was set to.
    */
   pause(value?: boolean): boolean {
-    return p(this).isPaused = value !== undefined ? !!value : !p(this).isPaused;
+    const oldValue = p(this).isPaused;
+    const newValue = p(this).isPaused = value !== undefined ? !!value : !p(this).isPaused;
+
+    if (oldValue !== newValue) newValue ? p(this).emittie.emit(PAUSED) : p(this).emittie.emit(RESUMED);
+
+    return newValue;
   }
 
   /**
    * Sets isStopped to true.
+   * @throws Error if already stopped.
+   * @throws Error if already completed.
    */
   stop(): void {
+    if (p(this).isStopped) throw new Error(`Streamie cannot be stopped, has already been stopped.`);
+    if (p(this).isCompleted) throw new Error(`Streamie cannot be stopped, has already completed.`);
     p(this).isStopped = true;
   }
 
   /**
+   * Begins completing process.
+   * @throws Error if already is completing.
+   * @throws Error if has already been stopped.
+   */
+  beginComplete(): void {
+    if (p(this).isCompleting) throw new Error(`Streamie cannot begin completing, is already completing.`);
+    if (p(this).isStopped) throw new Error(`Streamie cannot begin completing, has already been stopped.`);
+
+    p(this).isCompleting = true;
+    p(this).emittie.emit(COMPLETING);
+  }
+
+  /**
    * Sets isCompleted to true.
+   * @throws - Error if is not yet completing.
    */
   complete(): void {
+    if (!p(this).isCompleting) throw new Error(`Streamie cannot be completed, is not yet completing.`);
     p(this).isCompleted = true;
+    p(this).emittie.emit(COMPLETED);
   }
 }

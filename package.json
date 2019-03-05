@@ -32,6 +32,7 @@
   "license": "MIT",
   "devDependencies": {
     "shelljs": "^0.8.3",
+    "typedoc": "^0.14.2",
     "typescript": "^3.3.3333"
   }
 }
