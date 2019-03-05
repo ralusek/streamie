@@ -23,6 +23,7 @@ import * as EVENT_NAMES from './events/constants';
 // Event Handlers
 import bootstrapEventHandlers from './events/bootstrapEventHandlers/streamie';
 import bootstrapStateEventHandlers from './events/bootstrapEventHandlers/state';
+import _createDefaultConfiguration from './methods/private/_createDefaultConfiguration';
 
 
 // Method for private namespacing.
@@ -43,13 +44,7 @@ export default class Streamie {
     p(this).handler = handler;
 
     // Handle configuration.
-    p(this).config = {
-      ...config,
-      concurrency: config.concurrency || Infinity,
-      batchSize: config.batchSize || 1,
-      shouldSaturateChildren: config.shouldSaturateChildren || true,
-      maxBacklogFromConcurrency: config.maxBacklogFromConcurrency || 3 // 3 times concurrency
-    };
+    p(this).config = _createDefaultConfiguration(config);
 
     // Create data containers.
     p(this).state = new StreamieState(p(this).config);
