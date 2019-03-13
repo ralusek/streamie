@@ -21,7 +21,7 @@ function p(object) {
  */
 class Streamie {
   constructor(config = {}) {
-    
+
     p(this).name = config.name || utils.string.generateId();
 
     // Handle configuration.
@@ -81,7 +81,7 @@ class Streamie {
       stopped: false,
       completing: false,
       completed: false,
-      count: { 
+      count: {
         total: 0,
         batches: 0,
         batchesHandled: 0,
@@ -277,6 +277,13 @@ class Streamie {
   }
 
   /**
+   *
+   */
+  stream() {
+    return p(this).stream;
+  }
+
+  /**
    * Automatically source a new streamie based off of likely args.
    */
   static source(...args) {
@@ -408,7 +415,7 @@ function _handleCurrentBatch(streamie) {
   // The exception is if streamie is currently completing, and there is nothing
   // else backlogged, in which case we handle the batch prematurely, as there
   // will be no new items processed.
-  if ((active.length < batchSize) && !isDrainingBatch) return; 
+  if ((active.length < batchSize) && !isDrainingBatch) return;
 
 
   // In case the batch size has changed to something smaller than what is currently
@@ -485,7 +492,7 @@ function _handleResolution(streamie, batch, error, result) {
   // If filterTest is defined, we test the result.
   if (filterTest) {
     if (!filterTest(result)) return;
-    
+
     p(streamie).stream.push(output);
 
     // If stopAfter is specified, will stop if filtered count matches.
@@ -536,7 +543,7 @@ function _handleCompletion(streamie) {
   const finalValue = p(streamie).finalValue !== undefined ? p(streamie).finalValue : p(streamie).aggregate;
   p(streamie).promises.completed.deferred.resolve(finalValue);
   p(streamie).promises.done.deferred.resolve(finalValue);
-  
+
   // Signal completion to children.
   p(streamie).stream.push(null);
   _destroyStream(streamie);
