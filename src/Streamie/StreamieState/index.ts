@@ -15,6 +15,25 @@ import getReadableState from "./methods/public/getReadableState";
 // Event Names
 import { COMPLETING, COMPLETED, PAUSED, RESUMED } from "./events/constants";
 import { EventName, EventCallbackWithEventName } from "@root/Emittie/types";
+import { observable, computed } from "@root/utils/observable";
+
+const x: any = {};
+
+
+observable(x, 'value1', 5);
+observable(x, 'value2', 10);
+computed(x, 'sum', () => {
+  console.log('Is recomputed');
+  return x.value1 + x.value2;
+});
+
+x.value1 = 100;
+console.log(x.sum);
+x.sum;
+x.sum;
+x.value1 = 100;
+x.value2 = 150;
+console.log(x.sum);
 
 
 // Method for private namespacing.
