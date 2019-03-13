@@ -640,8 +640,8 @@ function _createStream(streamie) {
   };
 
   // Requires Node 8+
-  // if (functionalityTestStream.destroy) config.final = (callback) => _handleFinalStreamInput(streamie, callback);
-  // else config.flush = (callback) => _handleFinalStreamInput(streamie, callback);
+  if (functionalityTestStream.destroy) config.final = (callback) => _handleFinalStreamInput(streamie, callback);
+  else config.flush = (callback) => _handleFinalStreamInput(streamie, callback);
 
   const stream = new Stream.Transform(config);
 
