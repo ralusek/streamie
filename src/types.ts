@@ -1,9 +1,9 @@
 /**
  * Promise resolve function type.
  */
-export type PromiseResolve = (value:any) => void;
+export type PromiseResolve<T = any> = (reason?: T | PromiseLike<T>) => void;
 
 /**
  * Promise reject function type.
  */
-export type PromiseReject = (error:Error) => void;
+export type PromiseReject<T extends Error = Error> = (error: T) => void;

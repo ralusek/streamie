@@ -1,39 +1,21 @@
 // Types
-import Streamie from "@root/Streamie";
-import Emittie from "@root/Emittie";
-import { StreamieConfig } from "@root/Streamie/types";
-import { StreamieStatePublic, StreamieStatePrivateNamespace } from "./types";
-import { StreamieQueue } from "../StreamieQueue";
-import { StreamieQueueItem } from "../StreamieQueue/types";
+import Streamie from '@root/Streamie';
+import Emittie from '@root/utils/Emittie';
+import { StreamieConfig } from '@root/Streamie/types';
+import { StreamieStatePublic, StreamieStatePrivateNamespace } from './types';
+import { StreamieQueue } from '../StreamieQueue';
+import { StreamieInputItem } from '../StreamieQueue/types';
 
 // Utils
 import namespace, { P } from '@root/utils/namespace';
 
 // Public Methods
-import getReadableState from "./methods/public/getReadableState";
+import getReadableState from './methods/public/getReadableState';
 
 // Event Names
-import { COMPLETING, COMPLETED, PAUSED, RESUMED } from "./events/constants";
-import { EventName, EventCallbackWithEventName } from "@root/Emittie/types";
-import { observable, computed } from "@root/utils/observable";
+import { COMPLETING, COMPLETED, PAUSED, RESUMED } from './events/constants';
+import { EventName, EventCallbackWithEventName } from '@root/utils/Emittie/types';
 
-const x: any = {};
-
-
-observable(x, 'value1', 5);
-observable(x, 'value2', 10);
-computed(x, 'sum', () => {
-  console.log('Is recomputed');
-  return x.value1 + x.value2;
-});
-
-x.value1 = 100;
-console.log(x.sum);
-x.sum;
-x.sum;
-x.value1 = 100;
-x.value2 = 150;
-console.log(x.sum);
 
 
 // Method for private namespacing.
@@ -48,7 +30,7 @@ export default class StreamieState {
   public queue: StreamieQueue;
 
   /** The QueueItems being handled. */
-  public handling: Set<StreamieQueueItem>;
+  public handling: Set<StreamieInputItem>;
 
   /** The downstream child Streamies.*/
   public children: Set<Streamie>;
@@ -63,7 +45,7 @@ export default class StreamieState {
     p(this).isCompleted = false;
 
     this.queue = new StreamieQueue(); // The items which have yet to be handled or are currently handling
-    this.handling = new Set(); // The StreamieQueueItems being handled
+    this.handling = new Set(); // The StreamieInputItems being handled
     this.children = new Set(); // The downstream child Streamies
   }
 

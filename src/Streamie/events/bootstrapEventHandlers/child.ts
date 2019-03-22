@@ -2,7 +2,7 @@ import Streamie from "@root/Streamie";
 import { P } from "@root/utils/namespace";
 import { StreamiePrivateNamespace } from "@root/Streamie/types";
 import { EventHandler } from "../types";
-import { EventName } from "@root/Emittie/types";
+import { EventName } from "@root/utils/Emittie/types";
 
 // Private Methods
 import _refresh from "@root/Streamie/methods/private/_refresh";

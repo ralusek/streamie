@@ -1,6 +1,6 @@
 import Streamie from './index';
 import StreamieState from './StreamieState';
-import Emittie from '@root/Emittie';
+import Emittie from '@root/utils/Emittie';
 
 /**
  * The private namespace for instances of Streamie.

@@ -3,14 +3,14 @@ import { Handler, HandlerResult, Item, StreamieConfig, StreamiePrivateNamespace 
 import { StreamieStatePublic } from './StreamieState/types';
 import { MapConfig } from './methods/public/map/types';
 import { FilterConfig } from './methods/public/filter/types';
-import { EventName, EventCallback, EventCallbackWithEventName } from '@root/Emittie/types';
+import { EventName, EventCallback, EventCallbackWithEventName } from '@root/utils/Emittie/types';
 
 // Utils
 import namespace, { P } from '@root/utils/namespace';
 
 // Classes
 import StreamieState from './StreamieState';
-import Emittie from '@root/Emittie';
+import Emittie from '@root/utils/Emittie';
 
 // Public Methods
 import filter from './methods/public/filter';

@@ -2,7 +2,7 @@
 import Streamie from "@root/Streamie";
 import { P } from "@root/utils/namespace";
 import { StreamiePrivateNamespace, HandlerResult } from "@root/Streamie/types";
-import { EventName, EventPayload } from "@root/Emittie/types";
+import { EventName, EventPayload } from "@root/utils/Emittie/types";
 import { EventHandler } from "../types";
 
 // Events

@@ -2,7 +2,7 @@
 import { P } from "@root/utils/namespace";
 import Streamie from "@root/Streamie";
 import { StreamiePrivateNamespace } from "@root/Streamie/types";
-import { StreamieQueueItem } from "@root/Streamie/StreamieQueue/types";
+import { StreamieInputItem } from "@root/Streamie/StreamieQueue/types";
 import _handleQueueItem from "../_handleQueueItem";
 
 /**
@@ -17,7 +17,7 @@ export default (p:P<Streamie, StreamiePrivateNamespace>, self: Streamie): void =
   if (!p(self).state.readable.canHandle) return; // Exit refresh attempt if blocked.
 
   // Attempt to pull item off of queue, if available/allowed.
-  const next: StreamieQueueItem = p(self).state.queue.shift();
+  const next: StreamieInputItem = p(self).state.queue.shift();
   if (!next) return; // Exit refresh attempt if no queue item available for processing.
 
   _handleQueueItem(p, self, next);

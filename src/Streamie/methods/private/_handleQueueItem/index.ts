@@ -2,7 +2,7 @@
 import { P } from "@root/utils/namespace";
 import Streamie from "@root/Streamie";
 import { StreamiePrivateNamespace, HandlerResult } from "@root/Streamie/types";
-import { StreamieQueueItem } from "@root/Streamie/StreamieQueue/types";
+import { StreamieInputItem } from "@root/Streamie/StreamieQueue/types";
 import { ITEM_HANDLED } from "@root/Streamie/events/constants";
 
 /**
@@ -14,7 +14,7 @@ import { ITEM_HANDLED } from "@root/Streamie/events/constants";
 export default async (
   p: P<Streamie, StreamiePrivateNamespace>,
   self: Streamie,
-  queueItem: StreamieQueueItem
+  queueItem: StreamieInputItem
 ): Promise<HandlerResult> => {
   p(self).state.handling.add(queueItem);
 

@@ -1,21 +1,20 @@
 // Types
-import { Item } from "../types";
 import { DeferredWithPromise } from "@root/utils/defer";
+import { LinkedList } from "@root/utils/LinkedList";
 
 /**
  * The private namespace for instances of StreamieQueue
  */
-export type StreamieQueuePrivateNamespace = {
-  /** The first item in the queue. Will be replaced by the next item in the event of a .shift() */
-  head?: StreamieQueueItemContainer,
-  /** The last item in the queue. Will be replaced by a new item in the event of a .push() */
-  tail?: StreamieQueueItemContainer,
+export type StreamieQueuePrivateNamespace<StreamieInputItem = any> = {
+  /** */
+  advancedPlaceholders: LinkedList<StreamieQueueAdvancedPlaceholder>,
+  /** */
+  queued: LinkedList<StreamieInputItem>,
+  handling: Set<StreamieInputItem>,
   /** The length of the queue. */
   length: number,
   /** Whether or not the item should automatically advance. */
   canAutoAdvance: boolean,
-  /** The amount of queue items permitted to be shifted out of the queue. */
-  itemsPermittedToAdvance: number,
   /** The batch size of a shift. */
   batchSize: number,
 };
@@ -31,16 +30,16 @@ export type StreamieQueueConfig = {
 /**
  * A StreamieQueue item container.
  */
-export type StreamieQueueItem = {
+export type StreamieQueueItem<StreamieInputItem> = {
   createdAt: number,
-  item: Item,
+  item: StreamieInputItem,
   deferredHandler: DeferredWithPromise
 };
 
 /**
- * A container for a StreamieQueueItem for facilitating linked list implementation
+ * A StreamieQueue advanced placeholder container.
  */
-export type StreamieQueueItemContainer = {
-  queueItem: StreamieQueueItem,
-  next?: StreamieQueueItemContainer
+export type StreamieQueueAdvancedPlaceholder = {
+  createdAt: number,
+  deferredHandler: DeferredWithPromise
 };

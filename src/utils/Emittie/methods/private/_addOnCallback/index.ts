@@ -1,7 +1,7 @@
 // Types
 import { P } from "@root/utils/namespace";
-import Emittie from "@root/Emittie";
-import { EventName, EventCallback, EmittiePrivateNamespace, EmittieCallbackSets } from "@root/Emittie/types";
+import Emittie from "@root/utils/Emittie";
+import { EventName, EventCallback, EmittiePrivateNamespace, EmittieCallbackSets } from "@root/utils/Emittie/types";
 
 /**
  * Associates a callback with a given event name.

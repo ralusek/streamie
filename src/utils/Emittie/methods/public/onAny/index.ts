@@ -1,6 +1,6 @@
 // Types
-import Emittie from "@root/Emittie";
-import { EventCallback, EventName, EmittiePrivateNamespace, EventCallbackWithEventName } from "@root/Emittie/types";
+import Emittie from "@root/utils/Emittie";
+import { EventCallback, EventName, EmittiePrivateNamespace, EventCallbackWithEventName } from "@root/utils/Emittie/types";
 import { P } from "@root/utils/namespace";
 
 // Private Methods

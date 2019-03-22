@@ -1,5 +1,5 @@
 // Types
-import { EventName } from "@root/Emittie/types";
+import { EventName } from "@root/utils/Emittie/types";
 
 export const PAUSED: EventName = Symbol.for('Streamie State Event: Streamie State Paused');
 export const RESUMED: EventName = Symbol.for('Streamie State Event: Streamie State Resumed');

@@ -10,7 +10,7 @@ import {
   COMPLETED,
   RESUMED
 } from "@root/Streamie/StreamieState/events/constants";
-import {EventName, EventPayload } from "@root/Emittie/types";
+import {EventName, EventPayload } from "@root/utils/Emittie/types";
 import { EventHandler } from "../types";
 
 // Private Methods

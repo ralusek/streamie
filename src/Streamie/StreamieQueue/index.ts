@@ -1,19 +1,18 @@
 // Types
-import { Item } from "../types";
 import {
   StreamieQueuePrivateNamespace,
-  StreamieQueueItemContainer,
   StreamieQueueItem,
   StreamieQueueConfig
-} from "./types";
+} from './types';
 
 // Utils
 import namespace, { P } from '@root/utils/namespace';
-import _createQueueItemContainer from "./methods/private/_createQueueItemContainer";
 
 // Public Methods
-import shift from "./methods/public/shift";
-import push from "./methods/public/push";
+import shift from './methods/public/shift';
+import push from './methods/public/push';
+import { LinkedList } from '@root/utils/LinkedList';
+import advance from './methods/public/advance';
 
 
 // Method for private namespacing.
@@ -23,14 +22,13 @@ const p: P<StreamieQueue, StreamieQueuePrivateNamespace> = namespace();
 /**
  * A linked-list implementation of a queue for O(1) push and shift.
  */
-export class StreamieQueue {
+export class StreamieQueue<StreamieInputItem = any, StreamieOutputItem = any> {
   constructor({canAutoAdvance = true}: StreamieQueueConfig = {}) {
-    p(this).head;
-    p(this).tail;
-    p(this).canAutoAdvance = canAutoAdvance;
+    p(this).advancedPlaceholders = new LinkedList();
+    p(this).queued = new LinkedList<StreamieInputItem>();
+    p(this).handling = new Set<StreamieInputItem>();
 
-    p(this).length = 0;
-    p(this).itemsPermittedToAdvance = 0;
+    p(this).canAutoAdvance = canAutoAdvance;
   }
 
   /**
@@ -44,8 +42,11 @@ export class StreamieQueue {
   /**
    * Permit the advancement (shifting) of a queue item.
    */
-  advance():void {
-    p(this).itemsPermittedToAdvance++;
+  advance(): Promise<StreamieOutputItem> {
+    return advance<
+      StreamieQueue<StreamieInputItem, StreamieOutputItem>,
+      StreamieOutputItem
+    >(p, this);
   }
 
   /**
@@ -53,7 +54,7 @@ export class StreamieQueue {
    * @param item - The item to push into the queue.
    * @returns - The StreamieQueueItem for the Item that was added to the queue.
    */
-  push(item: Item): StreamieQueueItem {
+  push(item: StreamieInputItem): StreamieQueueItem<StreamieInputItem> {
     return push(p, this, item);
   }
 
@@ -63,7 +64,7 @@ export class StreamieQueue {
    * Attempts to shift an item off the head of the queue O(1)
    * @returns StreamieQueueItem if the shift was possible/allowed.
    */
-  shift(): StreamieQueueItem | undefined {
+  shift(): StreamieQueueItem<StreamieInputItem, StreamieOutputItem> | undefined {
     return shift(p, this);
   }
 }
