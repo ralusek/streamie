@@ -7,3 +7,14 @@ export type PromiseResolve<T = any> = (reason?: T | PromiseLike<T>) => void;
  * Promise reject function type.
  */
 export type PromiseReject<T extends Error = Error> = (error: T) => void;
+
+
+/**
+ *
+ */
+export type Omit<T, K> = Pick<T, Exclude<keyof T, K>>;
+
+/**
+ *
+ */
+export type Optionalize<T, K> = Omit<T, K> & Partial<T>;

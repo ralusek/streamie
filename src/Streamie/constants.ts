@@ -7,9 +7,8 @@ import { StreamieConfig } from "./types";
 export const STREAMIE_SHOULD_OMIT = Symbol.for('STREAMIE_SHOULD_OMIT');
 
 /** The default configuration values for StreamieConfig */
-export const DEFAULT_CONFIG: StreamieConfig = {
+export const DEFAULT_CONFIG: Partial<StreamieConfig> = {
   concurrency: Infinity,
   batchSize: 1,
   shouldSaturateChildren: true,
-  maxBacklogFromConcurrency: 3 // 3 times concurrency
 };

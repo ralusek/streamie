@@ -1,57 +1,68 @@
-import Streamie from './index';
-import StreamieState from './StreamieState';
-import Emittie from '@root/utils/Emittie';
+import { StreamieQueue } from './StreamieQueue/types';
+import { Emittie } from '@root/utils/Emittie/types';
+import { EventName } from './private/events/types';
 
 /**
- * The private namespace for instances of Streamie.
+ *
  */
-export type StreamiePrivateNamespace = {
-  emittie: Emittie,
-  handler: Handler,
-  state: StreamieState,
-  config: StreamieConfig
+export type StreamieState<InputItem = any, OutputItem = any> = {
+  private: StreamiePrivateState<InputItem, OutputItem>,
+  public: Streamie<InputItem, OutputItem>,
 };
+
+/**
+ * Streamie public state.
+ */
+export type Streamie<InputItem = any, OutputItem = any> = {
+
+};
+
+/**
+ * The private namespace for instances of Streamie
+ */
+export type StreamiePrivateState<InputItem = any, OutputItem = any> = {
+  emittie: Emittie<EventName>,
+  handler: StreamieHandler<InputItem, OutputItem>,
+  // state: StreamieState,
+  config: StreamieConfig,
+  queue: StreamieQueue<InputItem, OutputItem>,
+};
+
 
 /**
  * The configuration object to be passed to the Streamie constructor.
  */
 export type StreamieConfig = {
-  concurrency?: number,
-  flatten?: boolean,
-  batchSize?: number,
+  concurrency: number,
+  flatten: boolean,
+  batchSize: number,
   /**
    * Whether or not streamie should continue handling until _all_ children have
    * saturated backlogs, as opposed to _any_ children.
    */
-  shouldSaturateChildren?: boolean,
-  /** The multiplier from concurrency used to determine the maxBacklogLength if none provided. */
-  maxBacklogFromConcurrency?: number,
-  /**
-   * The maximum the queue length is allowed to get before upstream parents will
-   * stop
-   * */
-  maxBacklogLength?: number
+  shouldSaturateChildren: boolean,
+  /** */
+  maxBacklogLength: number
 };
 
 /**
  * Various useful state and utilities passed in on handler's invocation.
  */
-export type HandlerUtilities = {
-  streamie: Streamie
+export type HandlerUtilities<InputItem, OutputItem> = {
+  streamie: Streamie<InputItem, OutputItem>
 };
 
-/**
- * The data item to be pushed into the stream for processing.
- */
-export type Item = any;
 
 /**
  * The streamie's Handler function, to be called for every item processed in the
  * stream.
  */
-export type Handler = (item:Item, utils:HandlerUtilities) => HandlerResult;
+export type StreamieHandler<InputItem, OutputItem> = (
+  item: InputItem,
+  utils: HandlerUtilities<InputItem, OutputItem>
+) => StreamieHandlerResult<OutputItem>;
 
 /**
  * The resulting output from the Streamie's Handler function.
  */
-export type HandlerResult = any;
+export type StreamieHandlerResult<OutputItem> = OutputItem

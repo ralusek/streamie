@@ -20,21 +20,14 @@ export default <LinkedListItem>(
   p: P<LinkedList<LinkedListItem>, LinkedListPrivateNamespace<LinkedListItem>>,
   self: LinkedList<LinkedListItem>,
   {
-    batchSize = 1,
-    batchSizeIsMinimum = true
+    batchSize = 1
   }: LinkedListShiftConfig = {}
 ): LinkedListItem[] | undefined => {
-  const available = p(self).length;
-  if (available < batchSize && batchSizeIsMinimum) return;
+  const shifted: LinkedListItem[] = [];
 
-  batchSize = Math.min(available, batchSize);
-  if (batchSize < 1) return;
+  if ((batchSize < 1) || isNaN(batchSize)) return shifted;
 
-  p(self).length -= batchSize;
-
-  const shifted = [];
-
-  let head: LinkedListItemContainer<LinkedListItem> = p(this).head;
+  let head: LinkedListItemContainer<LinkedListItem> = p(self).head;
   for (let i = 0; i < batchSize; i++) {
     shifted.push(head.item);
     head = head.next;
@@ -46,6 +39,8 @@ export default <LinkedListItem>(
     p(self).head = undefined;
     p(self).tail = undefined;
   }
+
+  p(self).length -= batchSize;
 
   console.log('Head:', p(self).head && p(self).head.item);
   console.log('Tail', p(self).tail && p(self).tail.item);
