@@ -12,9 +12,9 @@ export type PromiseReject<T extends Error = Error> = (error: T) => void;
 /**
  *
  */
-export type Omit<T, K> = Pick<T, Exclude<keyof T, K>>;
+export type Omit<T, K extends keyof T> = Pick<T, Exclude<keyof T, K>>;
 
 /**
  *
  */
-export type Optionalize<T, K> = Omit<T, K> & Partial<T>;
+export type Optionalize<T, K extends keyof T> = Omit<T, K> & Partial<T>;

@@ -12,7 +12,7 @@ import { EventName } from '@root/Streamie/private/events/types';
 export default <InputItem, OutputItem>(
   state: StreamieState<InputItem, OutputItem>,
   item: InputItem,
-): Promise<OutputItem> => {
+): PromiseLike<OutputItem> => {
   const queueItem = state.private.queue.push(item);
 
   state.private.emittie.emit(EventName.ItemPushed);

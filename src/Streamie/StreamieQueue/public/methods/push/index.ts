@@ -4,7 +4,7 @@ import {
 } from '@root/Streamie/StreamieQueue/types';
 
 // Utils
-import { defer, DeferredWithPromise } from '@root/utils/defer';
+import { defer } from '@root/utils/defer';
 
 
 /**

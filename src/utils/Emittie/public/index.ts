@@ -17,7 +17,7 @@ export default <EventNameType extends string | symbol>(
   const publicState: Emittie<EventNameType> = {
 
     on(name: EventNameType, callback: EventCallback): void {
-      on(state, name, callback);
+      on<EventNameType>(state, name, callback);
     },
     onAny(callback: EventCallbackWithEventName<EventNameType>): void {
       onAny(state, callback);

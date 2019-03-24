@@ -24,7 +24,7 @@ export type Emittie<EventNameType extends string | symbol> = {
    * @param name - The EventName whose associated callbacks should be invoked with the payload(s)
    * @param payloads - The EventPayload(s) with which to invoke the associated callbacks
    */
-  emit: <T = any>(name: EventNameType, ...payloads: EventPayload<T>[]) => void,
+  emit: (name: EventNameType, ...payloads: EventPayload[]) => void,
 };
 
 /**
@@ -52,9 +52,12 @@ export type EventCallback = (...payloads: EventPayload[]) => void;
 /**
  * A callback registered and invoked on emit with the EventName, and EventPayloads.
  */
-export type EventCallbackWithEventName<EventNameType> = (eventName: EventNameType, ...payloads: EventPayload[]) => void;
+export type EventCallbackWithEventName<EventNameType> = (
+  eventName: EventNameType,
+  ...payloads: EventPayload[]
+) => void;
 
 /**
  * The value with which an event will be emitted.
  */
-export type EventPayload<T = any> = T;
+export type EventPayload = any;

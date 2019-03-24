@@ -20,11 +20,12 @@ export type DeferredWithPromise<T = any, Err extends Error = Error> = {
  * Defer promise.
  */
 export const defer = <T = any, Err extends Error = Error>(): DeferredWithPromise<T, Err> => {
-  let deferred: Deferred<T, Err>;
+  const deferredWithPromise: any = {};
 
-  const promise = new Promise<T>((resolve: PromiseResolve<T>, reject: PromiseReject<Err>) => {
-    deferred = { resolve, reject };
+  deferredWithPromise.promise = new Promise<T>((resolve: PromiseResolve<T>, reject: PromiseReject<Err>) => {
+    const deferred: Deferred<T, Err> = { resolve, reject };
+    deferredWithPromise.deferred = deferred;
   });
 
-  return { promise, deferred };
+  return deferredWithPromise;
 };

@@ -1,31 +1,12 @@
-import { StreamieQueue } from './StreamieQueue/types';
-import { Emittie } from '@root/utils/Emittie/types';
-import { EventName } from './private/events/types';
+import { StreamiePrivateState } from './private/types';
+import { Streamie } from './public/types';
 
 /**
  *
  */
-export type StreamieState<InputItem = any, OutputItem = any> = {
+export type StreamieState<InputItem, OutputItem> = {
   private: StreamiePrivateState<InputItem, OutputItem>,
   public: Streamie<InputItem, OutputItem>,
-};
-
-/**
- * Streamie public state.
- */
-export type Streamie<InputItem = any, OutputItem = any> = {
-
-};
-
-/**
- * The private namespace for instances of Streamie
- */
-export type StreamiePrivateState<InputItem = any, OutputItem = any> = {
-  emittie: Emittie<EventName>,
-  handler: StreamieHandler<InputItem, OutputItem>,
-  // state: StreamieState,
-  config: StreamieConfig,
-  queue: StreamieQueue<InputItem, OutputItem>,
 };
 
 
@@ -42,14 +23,9 @@ export type StreamieConfig = {
    */
   shouldSaturateChildren: boolean,
   /** */
-  maxBacklogLength: number
-};
-
-/**
- * Various useful state and utilities passed in on handler's invocation.
- */
-export type HandlerUtilities<InputItem, OutputItem> = {
-  streamie: Streamie<InputItem, OutputItem>
+  maxBacklogLength: number,
+  /** Should automatically advance the queue items without .advance having been explicitly called. */
+  autoAdvance: boolean,
 };
 
 
@@ -58,11 +34,18 @@ export type HandlerUtilities<InputItem, OutputItem> = {
  * stream.
  */
 export type StreamieHandler<InputItem, OutputItem> = (
-  item: InputItem,
+  input: InputItem | InputItem[],
   utils: HandlerUtilities<InputItem, OutputItem>
-) => StreamieHandlerResult<OutputItem>;
+) => StreamieHandlerResult<OutputItem> | PromiseLike<StreamieHandlerResult<OutputItem>>;
+
+/**
+ * Various useful state and utilities passed in on handler's invocation.
+ */
+export type HandlerUtilities<InputItem, OutputItem> = {
+  streamie: Streamie<InputItem, OutputItem>
+};
 
 /**
  * The resulting output from the Streamie's Handler function.
  */
-export type StreamieHandlerResult<OutputItem> = OutputItem
+export type StreamieHandlerResult<OutputItem> = OutputItem | OutputItem[]

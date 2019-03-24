@@ -15,5 +15,5 @@ export default <EventNameType extends string | symbol>(
 ): void => {
   const callbackSets = state.private.callbacks.on;
   if (!callbackSets[name]) callbackSets[name] = [];
-  callbackSets[name].push(callback);
+  (callbackSets[name] as EventCallback[]).push(callback);
 };

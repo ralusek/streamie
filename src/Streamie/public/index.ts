@@ -1,8 +1,10 @@
 // Types
-import { StreamieState, Streamie, StreamieConfig, StreamieHandler } from '../types';
+import { StreamieState, StreamieConfig } from '../types';
+import { Streamie } from './types';
 
 // Public Methods
 import push from './methods/push';
+
 
 
 /**
@@ -14,6 +16,15 @@ export default <InputItem, OutputItem>(
 ): Streamie<InputItem, OutputItem> => {
   const publicState: Streamie<InputItem, OutputItem> = {
     push: (item: InputItem) => push<InputItem, OutputItem>(state, item),
+
+    // Derived
+    get isAtBacklogCapacity() {
+      return false;
+      // return state.private.config.is
+    },
+    get isAtConcurrentCapacity() {
+      return false;
+    }
   };
 
   return publicState;

@@ -1,6 +1,6 @@
 // Types
 import { DeferredWithPromise } from '@root/utils/defer';
-import { LinkedList } from '@root/utils/LinkedList';
+import { LinkedList } from '@root/utils/LinkedList/types';
 
 /**
  *
@@ -26,9 +26,13 @@ export type StreamieQueue<InputItem = any, OutputItem = any> = {
   push: (item: InputItem) => StreamieQueueItem<InputItem, OutputItem>,
   /**
    * Attempts to shift items from the queue O(M), where M is number of items to remove.
+   * @param batchSize The amount of items to shift (M)
    * @returns StreamieQueueItem if the shift was possible/allowed.
    */
-  shift: () => StreamieQueueItem<InputItem, OutputItem>[],
+  shift: (batchSize: number) => StreamieQueueOutput<InputItem, OutputItem>[],
+
+  amountAdvanced: number,
+  amountQueued: number,
 };
 
 /**
@@ -36,22 +40,9 @@ export type StreamieQueue<InputItem = any, OutputItem = any> = {
  */
 export type StreamieQueuePrivateState<InputItem = any, OutputItem = any> = {
   /** */
-  advancedPlaceholders: LinkedList<StreamieQueueAdvancedPlaceholder>,
+  advancedPlaceholders: LinkedList<StreamieQueueAdvancedPlaceholder<OutputItem>>,
   /** */
   queued: LinkedList<StreamieQueueItem<InputItem, OutputItem>>,
-  handling: Set<StreamieQueueItem<InputItem, OutputItem>>,
-  /** Whether or not the item should automatically advance. */
-  canAutoAdvance: boolean,
-  /** The batch size of a shift. */
-  batchSize: number,
-};
-
-/**
- * The constructor configuration for StreamieQueueConfig.
- */
-export type StreamieQueueConfig = {
-  canAutoAdvance?: boolean,
-  batchSize?: number,
 };
 
 /**
@@ -66,7 +57,15 @@ export type StreamieQueueItem<InputItem, OutputItem> = {
 /**
  * A StreamieQueue advanced placeholder container.
  */
-export type StreamieQueueAdvancedPlaceholder = {
+export type StreamieQueueAdvancedPlaceholder<OutputItem> = {
   createdAt: number,
-  deferredHandler: DeferredWithPromise
+  deferredHandler: DeferredWithPromise<OutputItem>
+};
+
+/**
+ * A combinatio of a StreamieQueueItem adn a StreamieQueueAdvancedPlaceholder.
+ */
+export type StreamieQueueOutput<InputItem, OutputItem> = {
+  advancedPlaceholder: StreamieQueueAdvancedPlaceholder<OutputItem>,
+  queueItem: StreamieQueueItem<InputItem, OutputItem>,
 };

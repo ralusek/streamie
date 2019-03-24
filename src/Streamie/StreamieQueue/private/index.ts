@@ -1,20 +1,16 @@
 // Types
-import { StreamieQueueConfig, StreamieQueuePrivateState, StreamieQueueAdvancedPlaceholder, StreamieQueueItem } from '../types';
-import { LinkedList } from '@root/utils/LinkedList';
+import { StreamieQueuePrivateState, StreamieQueueAdvancedPlaceholder, StreamieQueueItem } from '../types';
+import createLinkedList from '@root/utils/LinkedList';
 
 /**
  * Bootstraps the state properties and behaviors.
  */
-export default <InputItem, OutputItem>({
-  canAutoAdvance = true,
-  batchSize = 1,
-}: StreamieQueueConfig): StreamieQueuePrivateState<InputItem, OutputItem> => {
+export default <InputItem, OutputItem>(
+
+): StreamieQueuePrivateState<InputItem, OutputItem> => {
   const state = {
-    advancedPlaceholders: new LinkedList<StreamieQueueAdvancedPlaceholder>(),
-    queued: new LinkedList<StreamieQueueItem<InputItem, OutputItem>>(),
-    handling: new Set<StreamieQueueItem<InputItem, OutputItem>>(),
-    canAutoAdvance,
-    batchSize,
+    advancedPlaceholders: createLinkedList<StreamieQueueAdvancedPlaceholder<OutputItem>>(),
+    queued: createLinkedList<StreamieQueueItem<InputItem, OutputItem>>(),
   };
 
   return state;
