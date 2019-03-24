@@ -32,6 +32,8 @@ export default <InputItem, OutputItem>(
   if (state.private.queue.amountAdvanced < batchSize) {
     if (!state.private.isCompleting && !state.private.config.autoAdvance) return false;
   }
+  // Check if all of the children are sufficiently backlogged so as to apply backpressure
+  if (!state.private.canPushToChildren) return false;
 
   return true;
 };

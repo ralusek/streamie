@@ -18,3 +18,8 @@ export type Omit<T, K extends keyof T> = Pick<T, Exclude<keyof T, K>>;
  *
  */
 export type Optionalize<T, K extends keyof T> = Omit<T, K> & Partial<T>;
+
+/**
+ * Identity
+ */
+export type Identity<T> = T;

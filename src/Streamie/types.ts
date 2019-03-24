@@ -1,5 +1,6 @@
-import { StreamiePrivateState } from './private/types';
+
 import { Streamie } from './public/types';
+import { StreamiePrivateState } from './private/types';
 
 /**
  *

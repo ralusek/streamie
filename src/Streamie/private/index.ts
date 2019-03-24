@@ -1,6 +1,7 @@
 // Types
+import { Streamie } from '../public/types';
 import { StreamieState, StreamieConfig, StreamieHandler } from '../types';
-import { StreamiePrivateState } from './types';
+import { EventName } from './events/types';
 
 // Utils
 import createEmittie from '@root/utils/Emittie';
@@ -8,10 +9,13 @@ import createStreamieQueue from '../StreamieQueue';
 
 // Derived
 import canHandle from './derived/canHandle';
+import isAtConcurrentCapacity from './derived/isAtConcurrentCapacity';
 import canPushToChildren from './derived/canPushToChildren';
 
 // Events
 import { bootstrap } from './events';
+import { StreamieQueueOutput } from '../StreamieQueue/types';
+
 
 
 /**
@@ -28,8 +32,8 @@ export default <InputItem, OutputItem>(
     maxBacklogLength = 3 * concurrency,
     autoAdvance = true,
   }: Partial<StreamieConfig>
-): StreamiePrivateState<InputItem, OutputItem> => {
-  const privateState: StreamiePrivateState<InputItem, OutputItem> = {
+) => {
+  const privateState = {
     handler,
     config: {
       concurrency,
@@ -40,11 +44,11 @@ export default <InputItem, OutputItem>(
       autoAdvance,
     },
 
-    children: new Set(),
+    children: new Set<Streamie>(),
 
-    queue: createStreamieQueue(),
-    emittie: createEmittie(),
-    handling: new Set(),
+    queue: createStreamieQueue<InputItem, OutputItem>(),
+    emittie: createEmittie<EventName>(),
+    handling: new Set<StreamieQueueOutput<InputItem, OutputItem>[]>(),
 
     isCompleting: false,
     isPaused: false,
@@ -53,6 +57,7 @@ export default <InputItem, OutputItem>(
 
     // Derived.
     get canHandle() { return canHandle(state); },
+    get isAtConcurrentCapacity() { return isAtConcurrentCapacity(state); },
     get canPushToChildren() { return canPushToChildren(state); },
   };
 

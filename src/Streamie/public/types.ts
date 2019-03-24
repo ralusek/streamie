@@ -7,5 +7,4 @@ export type Streamie<InputItem = any, OutputItem = any> = {
 
   // Derived
   isAtBacklogCapacity: boolean,
-  isAtConcurrentCapacity: boolean,
 };

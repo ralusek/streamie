@@ -1,27 +1,30 @@
 import { EventName } from './events/types';
-import { Emittie } from '@root/utils/Emittie/types';
-import { StreamieHandler, StreamieConfig } from '../types';
-import { StreamieQueue, StreamieQueueOutput } from '../StreamieQueue/types';
-import { Streamie } from '../public/types';
+import createStreamiePrivateState from './index';
+
+type CreateStreamiePrivateState = typeof createStreamiePrivateState;
+
+export type StreamiePrivateState<InputItem, OutputItem> = ReturnType<CreateStreamiePrivateState<InputItem, OutputItem>>;
+
 
 /**
  * The private namespace for instances of Streamie
  */
-export type StreamiePrivateState<InputItem = any, OutputItem = any> = {
-  emittie: Emittie<EventName>,
-  handler: StreamieHandler<InputItem, OutputItem>,
-  children: Set<Streamie>
+// export type StreamiePrivateState<InputItem = any, OutputItem = any> = {
+//   emittie: Emittie<EventName>,
+//   handler: StreamieHandler<InputItem, OutputItem>,
+//   children: Set<Streamie>
 
-  config: StreamieConfig,
-  queue: StreamieQueue<InputItem, OutputItem>,
-  handling: Set<StreamieQueueOutput<InputItem, OutputItem>[]>,
+//   config: StreamieConfig,
+//   queue: StreamieQueue<InputItem, OutputItem>,
+//   handling: Set<StreamieQueueOutput<InputItem, OutputItem>[]>,
+``
+//   // Derived
+//   canHandle: boolean,
+//   isAtConcurrentCapacity: boolean,
+//   canPushToChildren: boolean,
 
-  // Derived
-  canHandle: boolean,
-  canPushToChildren: boolean,
-
-  isCompleting: boolean,
-  isPaused: boolean,
-  isStopped: boolean,
-  isCompleted: boolean,
-};
+//   isCompleting: boolean,
+//   isPaused: boolean,
+//   isStopped: boolean,
+//   isCompleted: boolean,
+// };

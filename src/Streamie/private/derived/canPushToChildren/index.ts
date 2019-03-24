@@ -25,5 +25,7 @@ export default <InputItem, OutputItem>(
     }
   }
 
+  // If children should be saturated, not considered backlogged until all children
+  // are backlogged.
   return count < children.size;
 };
