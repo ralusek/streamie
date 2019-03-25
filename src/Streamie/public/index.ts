@@ -18,7 +18,7 @@ export default <InputItem, OutputItem>(
   config: Partial<StreamieConfig>
 ): Streamie<InputItem, OutputItem> => {
   const publicState: Streamie<InputItem, OutputItem> = {
-    push: (item: InputItem) => push<InputItem, OutputItem>(state, item),
+    push: (item: InputItem | InputItem[]) => push<InputItem, OutputItem>(state, item),
 
     // Derived
     get isAtBacklogCapacity() { return isAtBacklogCapacity(state); },

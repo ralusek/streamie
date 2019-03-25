@@ -2,6 +2,9 @@
 import { StreamieState } from '@root/Streamie/types';
 import { EventName } from '@root/Streamie/private/events/types';
 
+// Type Guards
+import { isMulti } from './typeguards';
+
 
 /**
  * Push a new item into the stream.
@@ -11,11 +14,20 @@ import { EventName } from '@root/Streamie/private/events/types';
  */
 export default <InputItem, OutputItem>(
   state: StreamieState<InputItem, OutputItem>,
-  item: InputItem,
-): PromiseLike<OutputItem> => {
-  const queueItem = state.private.queue.push(item);
+  item: InputItem | InputItem[],
+): PromiseLike<OutputItem | OutputItem[]> => {
+  const { config: { flatten }, queue } = state.private;
 
-  state.private.emittie.emit(EventName.ItemPushed);
+  const items = isMulti<InputItem>(item, flatten) ? item : [item];
 
-  return queueItem.deferredHandler.promise;
+  const promises = items.map(item => {
+    const queueItem = queue.push(item);
+    state.private.emittie.emit(EventName.ItemPushed);
+    return queueItem.deferredHandler.promise;
+  });
+
+  // If the input is flattening multiple inputs, await all inputs to complete
+  // handling. If not flattening, we will have just wrapped the item in a single
+  // item array, so it should just be returned alone.
+  return flatten ? Promise.all(promises) : promises[0];
 };

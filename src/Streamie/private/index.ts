@@ -1,7 +1,6 @@
 // Types
-import { Streamie } from '../public/types';
 import { StreamieState, StreamieConfig, StreamieHandler } from '../types';
-import { EventName } from './events/types';
+import { StreamiePrivateState } from './types';
 
 // Utils
 import createEmittie from '@root/utils/Emittie';
@@ -14,7 +13,6 @@ import canPushToChildren from './derived/canPushToChildren';
 
 // Events
 import { bootstrap } from './events';
-import { StreamieQueueOutput } from '../StreamieQueue/types';
 
 
 
@@ -33,7 +31,7 @@ export default <InputItem, OutputItem>(
     autoAdvance = true,
   }: Partial<StreamieConfig>
 ) => {
-  const privateState = {
+  const privateState: StreamiePrivateState<InputItem, OutputItem> = {
     handler,
     config: {
       concurrency,
@@ -44,11 +42,11 @@ export default <InputItem, OutputItem>(
       autoAdvance,
     },
 
-    children: new Set<Streamie>(),
+    children: new Set(),
 
-    queue: createStreamieQueue<InputItem, OutputItem>(),
-    emittie: createEmittie<EventName>(),
-    handling: new Set<StreamieQueueOutput<InputItem, OutputItem>[]>(),
+    queue: createStreamieQueue(),
+    emittie: createEmittie(),
+    handling: new Set(),
 
     isCompleting: false,
     isPaused: false,

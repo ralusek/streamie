@@ -1,4 +1,5 @@
-import { Streamie, StreamieHandler, StreamieConfig, StreamieState } from './types';
+import { StreamieHandler, StreamieConfig, StreamieState } from './types';
+import { Streamie } from './public/types';
 
 
 // Bootstrappers.

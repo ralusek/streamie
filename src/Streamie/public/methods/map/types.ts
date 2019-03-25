@@ -1,4 +1,4 @@
-import { StreamieConfig } from "@root/Streamie/types";
+import { StreamieConfig } from '@root/Streamie/types';
 
 /**
  * Configuration object for the map function. Extends standard StreamieConfig.
