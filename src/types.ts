@@ -1,3 +1,4 @@
+
 /**
  * Promise resolve function type.
  */
