@@ -1,4 +1,11 @@
-export type Handler<HI, HO> = (input: HI[]) => HO;
+export type Handler<HI, HO, C extends Config> = 
+    'batchSize' extends keyof C 
+    ? (C['batchSize'] extends (1 | undefined) 
+        ? (input: HI) => HO 
+        : (input: HI[]) => HO) 
+    : (input: HI) => HO;
+
+export type FlattenIfConfigTrue<T extends any, C extends Config> = C['flatten'] extends true ? Flatten<T> : T;
 
 export type Config = {
   // The number of items that can be in the input queue before backpressure will output as true.
@@ -10,7 +17,7 @@ export type Config = {
   // The number of items that should wait to be processed in a single handler call. Fewer items will
   // be passed into the handler in the event that the streamie has been told to clear, or in the event
   // that the maxBatchWait time has elapsed.
-  batchSize?: number;
+  batchSize?: 1 | undefined | number;
   // The maximum amount of time that should be waited before processing a batch of items. Should the
   // amount of time since the last handler call exceed this value, the handler will be called with
   // fewer than batchSize items.
@@ -23,25 +30,28 @@ export type Config = {
   flatten?: boolean;
 };
 
-export type Streamie<HI extends any, HO extends any> = {
-  push: (item: HI) => void;
+export type Flatten<T> = T extends any[] ? T[number] : T;
+
+export type Streamie<HI extends any, HO extends any, C extends Config> = {
+  push: (...items: HI[]) => void;
 
   // Forks for new streamies
-  map: <NHO extends any, C extends Config>(
-    handler: Handler<HO, NHO>,
-    config: C,
-  ) => Streamie<HO, NHO>;
-  filter: <NHO extends any, C extends Omit<Config, 'isFilter'>>(
-    handler: Handler<HO, NHO>,
-    config: C,
-  ) => Streamie<HO, NHO>;
+  map: <NHI extends FlattenIfConfigTrue<HO, C>, NHO extends any, NC extends Config>(
+    handler: Handler<NHI, NHO, NC>,
+    config: NC,
+  ) => Streamie<NHI, NHO, NC>;
+
+  filter: <NHI extends FlattenIfConfigTrue<HO, C>, NHO extends any, NC extends Omit<Config, 'isFilter'>>(
+    handler: Handler<NHI, NHO, NC>,
+    config: NC,
+  ) => Streamie<NHI, NHO, NC>;
 
   // Control flow
   pause: (shouldPause?: boolean) => void;
   drain: () => void;
 
   // Register input streamies
-  registerInput: (inputStreamie: Streamie<any, HI>) => void;
+  registerInput: (inputStreamie: Streamie<any, any, any>) => void;
 
   // Event handler registration
   onBackpressureRelease: (eventHandler: () => void) => void;
@@ -63,7 +73,20 @@ export type Streamie<HI extends any, HO extends any> = {
   promise: Promise<null>;
 };
 
-export type Consumer<HI extends any, HO extends any, NHO extends any> = {
-  push: (item: { input: HI[], output: HO }) => void;
-  streamie: Streamie<HO, NHO>;
-};
+export type Consumer<HI extends any, HO extends any, C extends Config> =
+'batchSize' extends keyof C 
+? C['batchSize'] extends (1 | undefined) 
+    ? {
+        push: (item: { input: HI; output: FlattenIfConfigTrue<HO, C> }) => void;
+        streamie: Streamie<FlattenIfConfigTrue<HO, C>, any, any>;
+      } 
+    : {
+        push: (item: { input: HI[]; output: FlattenIfConfigTrue<HO, C> }) => void;
+        streamie: Streamie<FlattenIfConfigTrue<HO, C>, any, any>;
+      }
+: {
+    push: (item: { input: HI; output: FlattenIfConfigTrue<HO, C> }) => void;
+    streamie: Streamie<FlattenIfConfigTrue<HO, C>, any, any>;
+  };
+
+

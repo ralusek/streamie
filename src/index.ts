@@ -1,18 +1,27 @@
-import { Streamie, Handler, Config, Consumer } from './types';
+import { Streamie, Handler, Config, Consumer, Flatten, FlattenIfConfigTrue } from './types';
+
+type SuccessQueue<HI extends any, HO extends any, C extends Config> =
+'batchSize' extends keyof C 
+? C['batchSize'] extends (1 | undefined) 
+    ? { input: HI, output: Awaited<FlattenIfConfigTrue<HO, C>> }
+    : { input: HI[], output: Awaited<FlattenIfConfigTrue<HO, C>> }
+: { input: HI, output: Awaited<FlattenIfConfigTrue<HO, C>> };
 
 export default function streamie<
   HI extends any,
   HO extends any,
-  C extends Config,
+  // Adding const here allows things like batchSize to be inferred as 1 instead of number,
+  // or flatten as true instead of boolean, which are necessary for the conditional types
+  const C extends Config,
 >(
-  handler: Handler<HI, HO>,
+  handler: Handler<HI, HO, C>,
   config: C,
 ) {
   const queue: {
     input: HI[];
     output: {
       // A queue pairing the input items with their handler output.
-      success: { input: HI[], output: HO }[];
+      success: SuccessQueue<HI, HO, C>[];
     };
   } = {
     input: [],
@@ -59,8 +68,8 @@ export default function streamie<
     hasHandledOnDrained: false,
   };
 
-  const consumers: Consumer<HI, HO, any>[] = [];
-  const inputStreamies: Streamie<any, HI>[] = [];
+  const consumers: Consumer<HI, HO, C>[] = [];
+  const inputStreamies: Streamie<any, HI, any>[] = [];
 
   const eventHandlers: {
     onBackpressureRelease: Set<() => void>;
@@ -113,7 +122,7 @@ export default function streamie<
     state.lastHandledAt = Date.now();
     state.count.handling++;
     const itemsToHandle = queue.input.splice(0, settings.batchSize);
-    // const handlerInput = settings.batchSize === 1 ? itemsToHandle[0] : itemsToHandle;
+    const handlerInput = settings.batchSize === 1 ? itemsToHandle[0] as HI : itemsToHandle as HI[];
 
     // Since we're in a valid state to process items and we're not yet at concurrency limit,
     // we begin another attempt to process items.
@@ -126,21 +135,21 @@ export default function streamie<
     }
 
     try {
-      // const handlerOutput = await (settings.batchSize === 1
-      //   ? (handler as (input: HI) => HO)(handlerInput as HI)
-      //   : (handler as (input: HI[]) => HO)(handlerInput as HI[])
-      // );
-      const handlerOutputPromise = handler(itemsToHandle);
-
-      const handlerOutput = await handlerOutputPromise;
+      const handlerOutput = await (settings.batchSize === 1
+        ? (handler as (input: HI) => HO)(handlerInput as HI)
+        : (handler as (input: HI[]) => HO)(handlerInput as HI[])
+      );
 
       // If the handler is a filter, we will only push to the output queue if the output is truthy.
       // Otherwise, all outputs go to the output queue.
       if (handlerOutput || !settings.isFilter) {
         if (settings.flatten) {
           if (!Array.isArray(handlerOutput)) throw new Error('Cannot flatten output that is not an array.');
-          queue.output.success.push(...handlerOutput.map((output) => ({ input: itemsToHandle, output })));
+          const items = handlerOutput.map((output) => ({ input: handlerInput, output }));
+          // @ts-ignore
+          queue.output.success.push(...items);
         }
+        // @ts-ignore
         else queue.output.success.push({ input: itemsToHandle, output: handlerOutput });
       }
     } catch (err) {
@@ -166,6 +175,7 @@ export default function streamie<
     const success = queue.output.success.shift();
     if (success) {
       consumers.forEach((consumer) => {
+        // @ts-ignore
         consumer.push(success);
       });
     }
@@ -207,30 +217,45 @@ export default function streamie<
   }
 
 
-  function map<NHO extends any, C extends Config>(
-    handler: Handler<HO, NHO>,
-    config: C,
+  function map<
+    NHI extends FlattenIfConfigTrue<HO, C>,
+    NHO extends any,
+    const NC extends Config
+  >(
+    handler: Handler<NHI, NHO, NC>,
+    config: NC,
   ) {
-    const nextStreamie: Streamie<HO, NHO> = streamie<HO, NHO, C>(handler, config);
+    // const nextStreamie: Streamie<C['flatten'] extends true ? Flatten<HO> : HO, NHO, NC> = streamie<C['flatten'] extends true ? Flatten<HO> : HO, NHO, NC>(handler, config);
+    // const nextStreamie: Streamie<NHI, NC['flatten'] extends true ? Flatten<NHO> : NHO, NC> = streamie<NHI, NC['flatten'] extends true ? Flatten<NHO> : NHO, NC>(handler, config);
+    const nextStreamie: Streamie<NHI, NHO, NC> = streamie<NHI, NHO, NC>(handler, config);
 
     nextStreamie.onBackpressureRelease(() => requestProcessOutput());
     nextStreamie.registerInput(self);
 
-    consumers.push({
-      push: (item) => {
-        nextStreamie.push(item.output);
-      },
+    const consumerPush = ((item: Parameters<Consumer<HI, HO, C>['push']>[0]) => {
+      nextStreamie.push(item.output as NHI);
+    }) as Consumer<HI, HO, C>['push'];
+
+    const consumer = {
+      push: consumerPush,
       streamie: nextStreamie,
-    });
+    } as Consumer<HI, HO, C>;
+
+    consumers.push(consumer);
 
     return nextStreamie;
   }
+  
 
-  function filter<NHO extends any, C extends Config>(
-    handler: Handler<HO, NHO>,
-    config: C,
+  function filter<
+      NHI extends C['flatten'] extends true ? Flatten<HO> : HO,
+      NHO extends any,
+      const NC extends Config
+  >(
+    handler: Handler<NHI, NHO, NC>,
+    config: NC,
   ) {
-    return map<NHO, C>(handler, { ...config, isFilter: true });
+    return map<NHI, NHO, NC>(handler, { ...config, isFilter: true });
   }
 
   // TODO add reduce, flatMap, etc.
@@ -247,7 +272,7 @@ export default function streamie<
 
   // This registers an input streamie, so that this streamie can be triggered to drain
   // in the event that all of its input streamies are drained.
-  function registerInput(inputStreamie: Streamie<any, HI>) {
+  function registerInput(inputStreamie: Streamie<any, any, any>) {
     inputStreamies.push(inputStreamie);
     inputStreamie.onDrained(() => {
       if (inputStreamies.every((inputStreamie) => inputStreamie.state.isDrained)) {
@@ -308,7 +333,7 @@ export default function streamie<
 
       if (settings.haltOnError) onError(({ error }) => reject(error));
     }),
-  } satisfies Streamie<HI, HO>;
+  } satisfies Streamie<HI, HO, C>;
 
   return self;
 }
