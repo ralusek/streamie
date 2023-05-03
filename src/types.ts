@@ -33,12 +33,14 @@ export type IfFilteredElse<A, B, C extends Config> =
         : B)
     : B;
 
-export type Handler<IQT, OQT, C extends Config> = (input: BatchedIfConfigured<IQT, C>) => BooleanIfFilter<UnflattenedIfConfigured<OQT, C>, C> | Promise<BooleanIfFilter<UnflattenedIfConfigured<OQT, C>, C>>;
+export type Handler<IQT, OQT, C extends Config> = (input: BatchedIfConfigured<IQT, C>, tools: Tools<IQT, OQT, C>) => BooleanIfFilter<UnflattenedIfConfigured<OQT, C>, C> | Promise<BooleanIfFilter<UnflattenedIfConfigured<OQT, C>, C>>;
 
-function doThing<C extends Config>(config: C) {
-  const a: OutputIsInputIfFilter<BatchedIfConfigured<number, { batchSize: 1 }>, 5, { isFilter: false }> = 5;
-}
 
+type Tools<IQT, OQT, C extends Config> = {
+  self: Streamie<IQT, OQT, C>;
+  push: Streamie<IQT, OQT, C>['push'];
+  index: number;
+};
 
 
 export type Config = {

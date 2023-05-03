@@ -98,7 +98,7 @@ describe('Streamie', () => {
       }, { flatten: true })
       .map((output) => {
         return output * 2;
-      }, {})
+      }, {});
       
       const final = filteredStreamie.map((final) => {
         result.push(final);

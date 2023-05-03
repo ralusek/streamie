@@ -50,6 +50,7 @@ export default function streamie<
 
   const state: {
     count: {
+      started: number;
       handling: number;
     };
     lastHandledAt: number | null;
@@ -61,10 +62,14 @@ export default function streamie<
     hasHandledOnDrained: boolean;
   } = {
     count: {
+      started: 0,
       handling: 0,
     },
     lastHandledAt: null,
     get backpressure() {
+      // We base backpressure off of the output queue. This also takes into account child
+      // streamies, as their own backpressure will prevent the output queue from outputting,
+      // and will cause it to exceed this threshold.
       return queue.output.success.length >= settings.backpressureAt;
     },
     get isDrained() {
@@ -143,11 +148,13 @@ export default function streamie<
     }
 
     try {
-      // const handlerOutput = await (settings.batchSize === 1
-      //   ? (handler as (input: IQT) => OQT)(handlerInput as IQT)
-      //   : (handler as (input: IQT[]) => OQT)(handlerInput as IQT[])
-      // );
-      const handlerOutput: BooleanIfFilter<UnflattenedIfConfigured<OQT, C>, C> = await handler(handlerInput);
+      const handlerOutput: BooleanIfFilter<UnflattenedIfConfigured<OQT, C>, C> = await handler(
+        handlerInput, {
+          self,
+          push: self.push,
+          index: state.count.started++,
+        },
+      );
 
 
       (() => {
