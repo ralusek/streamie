@@ -1,4 +1,65 @@
-export type Handler<HI, HO> = (input: HI[]) => HO;
+export type BatchedIfConfigured<T, C extends Config> =
+    'batchSize' extends keyof C
+    ? (C['batchSize'] extends (1 | undefined)
+        ? T
+        : T[])
+    : T;
+
+export type UnflattenedIfConfigured<T, C extends Config> =
+    'flatten' extends keyof C
+    ? (C['flatten'] extends true
+        ? T[]
+        : T)
+    : T;
+
+export type Handler<HI, HO, C extends Config> = (input: BatchedIfConfigured<HI, C>) => UnflattenedIfConfigured<HO, C>;
+
+function test<HI, HO, const C extends Config>(
+  handler: Handler<HI, HO, C>,
+  config: C,
+): Streamie<HI, HO, C> {
+  return {
+    push: (item: HI) => {
+      // handler(config.batchSize && config.batchSize !== 1 ? [item] : item);
+    },
+    map: <NHO extends any, NC extends Config>(
+      handler: Handler<HO, NHO, NC>,
+      config: NC,
+    ) => test(handler, config),
+    filter: <NHO extends any, NC extends Omit<Config, 'isFilter'>>(
+      handler: Handler<HO, NHO, NC>,
+      config: NC,
+    ) => test(handler, config),
+    pause: (shouldPause?: boolean) => {},
+    drain: () => {},
+    registerInput: (inputStreamie: Streamie<any, any, any>) => {},
+    onBackpressureRelease: (eventHandler: () => void) => {},
+    onDrained: (eventHandler: () => void) => {},
+    onError: (eventHandler: (payload: { input: BatchedIfConfigured<HI, C>; error: any; }) => void) => {},
+    promise: new Promise(() => {}),
+
+    state: {
+      backpressure: false,
+      isPaused: false,
+      isDrained: false,
+      isHalted: false,
+      count: {
+        handling: 0,
+      },
+    },
+  };
+}
+
+const x = test<number, number[][], { batchSize: 2, flatten: false }>((input: number[]): number[][] => {
+  return [input];
+}, { batchSize: 2, flatten: false})
+// .map((input) => {
+  
+// }, { batchSize: 2});
+
+x.push(5);
+
+
 
 export type Config = {
   // The number of items that can be in the input queue before backpressure will output as true.
@@ -23,30 +84,33 @@ export type Config = {
   flatten?: boolean;
 };
 
-export type Streamie<HI extends any, HO extends any> = {
+export type Streamie<HI extends any, HO extends any, C extends Config> = {
   push: (item: HI) => void;
 
   // Forks for new streamies
-  map: <NHO extends any, C extends Config>(
-    handler: Handler<HO, NHO>,
-    config: C,
-  ) => Streamie<HO, NHO>;
-  filter: <NHO extends any, C extends Omit<Config, 'isFilter'>>(
-    handler: Handler<HO, NHO>,
-    config: C,
-  ) => Streamie<HO, NHO>;
+  map: <NHO extends any, NC extends Config>(
+    handler: Handler<HO, NHO, NC>,
+    config: NC,
+  ) => Streamie<HO, NHO, NC>;
+  filter: <NHO extends any, NC extends Omit<Config, 'isFilter'>>(
+    handler: Handler<HO, NHO, NC>,
+    config: NC,
+  ) => Streamie<HO, NHO, NC>;
 
   // Control flow
   pause: (shouldPause?: boolean) => void;
   drain: () => void;
 
   // Register input streamies
-  registerInput: (inputStreamie: Streamie<any, HI>) => void;
+  // We woudl be included to say that the "HO" of an input streamie should be
+  // the "HI" of this streamie, but we would need to know whether or not the
+  // input streamie had been flattened.
+  registerInput: (inputStreamie: Streamie<any, any, any>) => void;
 
   // Event handler registration
   onBackpressureRelease: (eventHandler: () => void) => void;
   onDrained: (eventHandler: () => void) => void;
-  onError: (eventHandler: (payload: { input: HI[];  error: any; }) => void) => void;
+  onError: (eventHandler: (payload: { input: BatchedIfConfigured<HI, C>, error: any }) => void) => void;
 
   // Public state
   state: {
@@ -61,9 +125,4 @@ export type Streamie<HI extends any, HO extends any> = {
 
   // Promise which resolves when the streamie is drained.
   promise: Promise<null>;
-};
-
-export type Consumer<HI extends any, HO extends any, NHO extends any> = {
-  push: (item: { input: HI[], output: HO }) => void;
-  streamie: Streamie<HO, NHO>;
 };

@@ -4,10 +4,10 @@ describe('Streamie', () => {
   // Test the map function
   test('map function', async () => {
     let mappedStreamieWasDrained = false;
-    const initialStreamie = streamie(([input]: number[]) => input * 2, {});
+    const initialStreamie = streamie((input: number) => input * 2, {});
 
     const result: number[] = [];
-    const mappedStreamie = initialStreamie.map(([output]: number[]) => result.push(output + 1), {});
+    const mappedStreamie = initialStreamie.map((output) => result.push(output + 1), {});
     mappedStreamie.onDrained(() => {
       mappedStreamieWasDrained = true;
       expect(result).toEqual([3, 5, 7]);
@@ -22,10 +22,10 @@ describe('Streamie', () => {
   // Test the filter function
   test('filter function', async () => {
     let filteredStreamieWasDrained = false;
-    const initialStreamie = streamie(([input]: number[]) => input, {});
+    const initialStreamie = streamie((input: number) => input, {});
 
     const result: number[] = [];
-    const filteredStreamie = initialStreamie.filter(([output]: number[]) => {
+    const filteredStreamie = initialStreamie.filter((output) => {
       const keep = output % 2 === 0;
       if (keep) {
         result.push(output);
@@ -46,7 +46,10 @@ describe('Streamie', () => {
   // Test the map function with batchSize > 1
   test('map function with batchSize > 1', async () => {
     let mappedStreamieWasDrained = false;
-    const initialStreamie = streamie((inputs: number[]) => inputs.map(input => input * 2), { batchSize: 2 });
+    const initialStreamie = streamie<number, number[], { batchSize: 2}>(
+      (inputs: number[]) => inputs.map(input => input * 2),
+      { batchSize: 2 }
+    );
     
     const expectationsByBatch = [
       [2, 4],

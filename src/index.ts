@@ -1,18 +1,18 @@
-import { Streamie, Handler, Config, Consumer } from './types';
+import { Streamie, Handler, Config, BatchedIfConfigured, UnflattenedIfConfigured } from './types';
 
 export default function streamie<
   HI extends any,
   HO extends any,
-  C extends Config,
+  const C extends Config,
 >(
-  handler: Handler<HI, HO>,
+  handler: Handler<HI, HO, C>,
   config: C,
 ) {
   const queue: {
     input: HI[];
     output: {
       // A queue pairing the input items with their handler output.
-      success: { input: HI[], output: HO }[];
+      success: { input: BatchedIfConfigured<HI, C>, output: HO }[];
     };
   } = {
     input: [],
@@ -59,13 +59,13 @@ export default function streamie<
     hasHandledOnDrained: false,
   };
 
-  const consumers: Consumer<HI, HO, any>[] = [];
-  const inputStreamies: Streamie<any, HI>[] = [];
+  const consumers: Streamie<HO, any, any>[] = []
+  const inputStreamies: Streamie<any, any, any>[] = [];
 
   const eventHandlers: {
     onBackpressureRelease: Set<() => void>;
     onDrained: Set<() => void>;
-    onError: Set<(payload: { input: HI[], error: any }) => void>;
+    onError: Set<(payload: { input: BatchedIfConfigured<HI, C>, error: any }) => void>;
   } = {
     onBackpressureRelease: new Set(),
     onDrained: new Set(),
@@ -113,7 +113,7 @@ export default function streamie<
     state.lastHandledAt = Date.now();
     state.count.handling++;
     const itemsToHandle = queue.input.splice(0, settings.batchSize);
-    // const handlerInput = settings.batchSize === 1 ? itemsToHandle[0] : itemsToHandle;
+    const handlerInput = (settings.batchSize === 1 ? itemsToHandle[0] : itemsToHandle) as BatchedIfConfigured<HI, C>;
 
     // Since we're in a valid state to process items and we're not yet at concurrency limit,
     // we begin another attempt to process items.
@@ -130,23 +130,22 @@ export default function streamie<
       //   ? (handler as (input: HI) => HO)(handlerInput as HI)
       //   : (handler as (input: HI[]) => HO)(handlerInput as HI[])
       // );
-      const handlerOutputPromise = handler(itemsToHandle);
+      const handlerOutput: UnflattenedIfConfigured<HO, C> = await handler(handlerInput);
 
-      const handlerOutput = await handlerOutputPromise;
 
       // If the handler is a filter, we will only push to the output queue if the output is truthy.
       // Otherwise, all outputs go to the output queue.
       if (handlerOutput || !settings.isFilter) {
         if (settings.flatten) {
           if (!Array.isArray(handlerOutput)) throw new Error('Cannot flatten output that is not an array.');
-          queue.output.success.push(...handlerOutput.map((output) => ({ input: itemsToHandle, output })));
+          queue.output.success.push(...(handlerOutput as HO[]).map((output: HO) => ({ input: handlerInput, output })));
         }
-        else queue.output.success.push({ input: itemsToHandle, output: handlerOutput });
+        else queue.output.success.push({ input: handlerInput, output: handlerOutput as HO });
       }
     } catch (err) {
       if (settings.haltOnError) state.isHalted = true;
       eventHandlers.onError.forEach((eventHandler) => {
-        eventHandler({ input: itemsToHandle, error: err });
+        eventHandler({ input: handlerInput, error: err });
       });
     }
     state.count.handling--;
@@ -161,14 +160,12 @@ export default function streamie<
     // TODO should allow different strategies, but for now we will say that if any consumer
     // is backpressured, no other consumers will be pushed to, as this could allow a queue
     // to grow indefinitely.
-    if (consumers.some((consumer) => consumer.streamie.state.backpressure)) return;
+    if (consumers.some((consumer) => consumer.state.backpressure)) return;
 
     const success = queue.output.success.shift();
-    if (success) {
-      consumers.forEach((consumer) => {
-        consumer.push(success);
-      });
-    }
+    consumers.forEach((consumer) => {
+      consumer.push(success!.output);
+    });
 
     requestProcessOutput();
   }
@@ -207,30 +204,25 @@ export default function streamie<
   }
 
 
-  function map<NHO extends any, C extends Config>(
-    handler: Handler<HO, NHO>,
-    config: C,
-  ) {
-    const nextStreamie: Streamie<HO, NHO> = streamie<HO, NHO, C>(handler, config);
+  function map<NHO extends any, NC extends Config>(
+    handler: Handler<HO, NHO, NC>,
+    config: NC,
+  ): Streamie<HO, NHO, NC> {
+    const nextStreamie: Streamie<HO, NHO, NC> = streamie<HO, NHO, NC>(handler, config);
 
     nextStreamie.onBackpressureRelease(() => requestProcessOutput());
     nextStreamie.registerInput(self);
 
-    consumers.push({
-      push: (item) => {
-        nextStreamie.push(item.output);
-      },
-      streamie: nextStreamie,
-    });
+    consumers.push(nextStreamie);
 
     return nextStreamie;
   }
 
-  function filter<NHO extends any, C extends Config>(
-    handler: Handler<HO, NHO>,
-    config: C,
-  ) {
-    return map<NHO, C>(handler, { ...config, isFilter: true });
+  function filter<NHO extends any, NC extends Config>(
+    handler: Handler<HO, NHO, NC>,
+    config: NC,
+  ): Streamie<HO, NHO, NC> {
+    return map<NHO, NC>(handler, { ...config, isFilter: true });
   }
 
   // TODO add reduce, flatMap, etc.
@@ -247,7 +239,7 @@ export default function streamie<
 
   // This registers an input streamie, so that this streamie can be triggered to drain
   // in the event that all of its input streamies are drained.
-  function registerInput(inputStreamie: Streamie<any, HI>) {
+  function registerInput(inputStreamie: Streamie<any, any, any>) {
     inputStreamies.push(inputStreamie);
     inputStreamie.onDrained(() => {
       if (inputStreamies.every((inputStreamie) => inputStreamie.state.isDrained)) {
@@ -265,7 +257,7 @@ export default function streamie<
     eventHandlers.onDrained.add(eventHandler);
   }
 
-  function onError(eventHandler: (payload: { input: HI[], error: any }) => void) {
+  function onError(eventHandler: (payload: { input: BatchedIfConfigured<HI, C>, error: any }) => void) {
     eventHandlers.onError.add(eventHandler);
   }
 
@@ -308,7 +300,7 @@ export default function streamie<
 
       if (settings.haltOnError) onError(({ error }) => reject(error));
     }),
-  } satisfies Streamie<HI, HO>;
+  } satisfies Streamie<HI, HO, C>;
 
   return self;
 }
