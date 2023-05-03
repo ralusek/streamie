@@ -1,18 +1,35 @@
-import { Streamie, Handler, Config, BatchedIfConfigured, UnflattenedIfConfigured } from './types';
+import { Streamie, Handler, Config, BatchedIfConfigured, UnflattenedIfConfigured, BooleanIfFilter, OutputIsInputIfFilter, IfFilteredElse } from './types';
 
 export default function streamie<
-  HI extends any,
-  HO extends any,
+  IQT extends any,
+  OQT extends IfFilteredElse<
+    // If the streamie is a filter, the output queue type is the input to the handler.
+    // We need to account for the possibility that the input to the handler is batched.
+    BatchedIfConfigured<IQT, C>,
+    any,
+    C
+  >,
   const C extends Config,
 >(
-  handler: Handler<HI, HO, C>,
+  handler: Handler<IQT, OQT, C>,
   config: C,
 ) {
   const queue: {
-    input: HI[];
+    input: IQT[];
     output: {
       // A queue pairing the input items with their handler output.
-      success: { input: BatchedIfConfigured<HI, C>, output: HO }[];
+      success: {
+        // We always pair the input of the handler with the queue output,
+        // regardless of whether the output has been flattened or not.
+        // The input of the handler may or may not have been batched.
+        input: BatchedIfConfigured<IQT, C>;
+        // Output is always the OQT, but not always the direct return value
+        // of the handler. If the streamie is flattened, the handler output
+        // is an array, and will be OQT[]. If the streamie is filtered, the
+        // return value of the handler is a boolean, and OQT will be equal to
+        // IQT, or IQT[] if the streamie is batched.
+        output: OQT;
+      }[];
     };
   } = {
     input: [],
@@ -59,13 +76,13 @@ export default function streamie<
     hasHandledOnDrained: false,
   };
 
-  const consumers: Streamie<HO, any, any>[] = []
+  const consumers: Streamie<OQT, any, any>[] = []
   const inputStreamies: Streamie<any, any, any>[] = [];
 
   const eventHandlers: {
     onBackpressureRelease: Set<() => void>;
     onDrained: Set<() => void>;
-    onError: Set<(payload: { input: BatchedIfConfigured<HI, C>, error: any }) => void>;
+    onError: Set<(payload: { input: BatchedIfConfigured<IQT, C>, error: any }) => void>;
   } = {
     onBackpressureRelease: new Set(),
     onDrained: new Set(),
@@ -113,7 +130,7 @@ export default function streamie<
     state.lastHandledAt = Date.now();
     state.count.handling++;
     const itemsToHandle = queue.input.splice(0, settings.batchSize);
-    const handlerInput = (settings.batchSize === 1 ? itemsToHandle[0] : itemsToHandle) as BatchedIfConfigured<HI, C>;
+    const handlerInput = (settings.batchSize === 1 ? itemsToHandle[0] : itemsToHandle) as BatchedIfConfigured<IQT, C>;
 
     // Since we're in a valid state to process items and we're not yet at concurrency limit,
     // we begin another attempt to process items.
@@ -127,21 +144,38 @@ export default function streamie<
 
     try {
       // const handlerOutput = await (settings.batchSize === 1
-      //   ? (handler as (input: HI) => HO)(handlerInput as HI)
-      //   : (handler as (input: HI[]) => HO)(handlerInput as HI[])
+      //   ? (handler as (input: IQT) => OQT)(handlerInput as IQT)
+      //   : (handler as (input: IQT[]) => OQT)(handlerInput as IQT[])
       // );
-      const handlerOutput: UnflattenedIfConfigured<HO, C> = await handler(handlerInput);
+      const handlerOutput: BooleanIfFilter<UnflattenedIfConfigured<OQT, C>, C> = await handler(handlerInput);
 
 
-      // If the handler is a filter, we will only push to the output queue if the output is truthy.
-      // Otherwise, all outputs go to the output queue.
-      if (handlerOutput || !settings.isFilter) {
+      (() => {
+        // If the handler is a filter, the return value is a boolean, and if the return value is false, we
+        // do not push to the output queue. If the output is truthy, we pass the input through to
+        // the output queue.
+        if (settings.isFilter) {
+          if (!handlerOutput) return; // Handler returned false, so we do not push anything to the output queue.
+          const filterOutput = handlerInput; // Handler returned true, so we push the input to the output queue.
+          const successQueue = queue.output.success as { input: BatchedIfConfigured<IQT, C>, output: BatchedIfConfigured<IQT, C> }[];
+          if (!settings.flatten) {
+            return successQueue.push({ input: handlerInput, output: filterOutput });
+          }
+          if (!Array.isArray(handlerInput)) throw new Error('Cannot flatten input that is not an array.');
+          // At this point we are flattening either an array of inputs that are arrayed due to batching, or
+          // the input is itself an array. We don't care which, we just want to flatten it. Adding additional
+          // conditionals to check batchSize just to improve the typing from any[] is not worth actually adding
+          // actual complexity to the runtime code.
+          return successQueue.push(...(filterOutput as any[]).map((input) => ({ input, output: input })));
+        }
+
+        const successQueue = queue.output.success as { input: BatchedIfConfigured<IQT, C>, output: OQT }[];
         if (settings.flatten) {
           if (!Array.isArray(handlerOutput)) throw new Error('Cannot flatten output that is not an array.');
-          queue.output.success.push(...(handlerOutput as HO[]).map((output: HO) => ({ input: handlerInput, output })));
+          successQueue.push(...(handlerOutput as OQT[]).map((output) => ({ input: handlerInput, output })));
         }
-        else queue.output.success.push({ input: handlerInput, output: handlerOutput as HO });
-      }
+        else successQueue.push({ input: handlerInput, output: handlerOutput as OQT });
+      })();
     } catch (err) {
       if (settings.haltOnError) state.isHalted = true;
       eventHandlers.onError.forEach((eventHandler) => {
@@ -195,7 +229,7 @@ export default function streamie<
 
 
   // Public functions
-  function push(...items: HI[]) {
+  function push(...items: IQT[]) {
     if (state.isHalted) throw new Error('Cannot push to a halted streamie.');
     if (state.shouldDrain) throw new Error(`Cannot push to a ${ state.isDrained ? 'drained' : 'draining'} streamie.`);
 
@@ -204,11 +238,18 @@ export default function streamie<
   }
 
 
-  function map<NHO extends any, NC extends Config>(
-    handler: Handler<HO, NHO, NC>,
+  function map<
+    NOQT extends IfFilteredElse<
+      BatchedIfConfigured<OQT, NC>,
+      any,
+      NC
+    >,
+    NC extends Config
+  >(
+    handler: Handler<OQT, NOQT, NC>,
     config: NC,
-  ): Streamie<HO, NHO, NC> {
-    const nextStreamie: Streamie<HO, NHO, NC> = streamie<HO, NHO, NC>(handler, config);
+  ): Streamie<OQT, NOQT, NC> {
+    const nextStreamie = streamie(handler, config) as Streamie<OQT, NOQT, NC>;
 
     nextStreamie.onBackpressureRelease(() => requestProcessOutput());
     nextStreamie.registerInput(self);
@@ -218,11 +259,16 @@ export default function streamie<
     return nextStreamie;
   }
 
-  function filter<NHO extends any, NC extends Config>(
-    handler: Handler<HO, NHO, NC>,
+  function filter<NC extends Omit<Config, 'isFilter'>>(
+    handler: Handler<OQT, boolean, NC>,
     config: NC,
-  ): Streamie<HO, NHO, NC> {
-    return map<NHO, NC>(handler, { ...config, isFilter: true });
+  ): Streamie<OQT, BatchedIfConfigured<OQT, NC>, NC> {
+    const nextStreamie = map(
+      // @ts-ignore
+      handler,
+      { ...config, isFilter: true },
+    ) as Streamie<OQT, BatchedIfConfigured<OQT, NC>, NC>;
+    return nextStreamie;
   }
 
   // TODO add reduce, flatMap, etc.
@@ -257,7 +303,7 @@ export default function streamie<
     eventHandlers.onDrained.add(eventHandler);
   }
 
-  function onError(eventHandler: (payload: { input: BatchedIfConfigured<HI, C>, error: any }) => void) {
+  function onError(eventHandler: (payload: { input: BatchedIfConfigured<IQT, C>, error: any }) => void) {
     eventHandlers.onError.add(eventHandler);
   }
 
@@ -300,7 +346,7 @@ export default function streamie<
 
       if (settings.haltOnError) onError(({ error }) => reject(error));
     }),
-  } satisfies Streamie<HI, HO, C>;
+  } satisfies Streamie<IQT, OQT, C>;
 
   return self;
 }

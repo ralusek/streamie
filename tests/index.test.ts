@@ -4,7 +4,7 @@ describe('Streamie', () => {
   // Test the map function
   test('map function', async () => {
     let mappedStreamieWasDrained = false;
-    const initialStreamie = streamie((input: number) => input * 2, {});
+    const initialStreamie = streamie(async (input: number) => input * 2, {});
 
     const result: number[] = [];
     const mappedStreamie = initialStreamie.map((output) => result.push(output + 1), {});
@@ -17,30 +17,6 @@ describe('Streamie', () => {
     initialStreamie.drain();
     await mappedStreamie.promise;
     expect(mappedStreamieWasDrained).toBe(true);
-  });
-
-  // Test the filter function
-  test('filter function', async () => {
-    let filteredStreamieWasDrained = false;
-    const initialStreamie = streamie((input: number) => input, {});
-
-    const result: number[] = [];
-    const filteredStreamie = initialStreamie.filter((output) => {
-      const keep = output % 2 === 0;
-      if (keep) {
-        result.push(output);
-      }
-      return keep;
-    }, {});
-    filteredStreamie.onDrained(() => {
-      filteredStreamieWasDrained = true;
-      expect(result).toEqual([2, 4]);
-    });
-
-    initialStreamie.push(1, 2, 3, 4);
-    initialStreamie.drain();
-    await filteredStreamie.promise;
-    expect(filteredStreamieWasDrained).toBe(true);
   });
 
   // Test the map function with batchSize > 1
@@ -74,7 +50,6 @@ describe('Streamie', () => {
     expect(mappedStreamieWasDrained).toBe(true);
   });
 
-
   test('map function with batchSize > 1 and flatten: true', async () => {
     let mappedStreamieWasDrained = false;
     const initialStreamie = streamie((inputs: number[]) => inputs.map(input => input * 2), { batchSize: 2, flatten: true });
@@ -104,25 +79,91 @@ describe('Streamie', () => {
     expect(mappedStreamieWasDrained).toBe(true);
   });
 
-  // // Test the filter function with batchSize > 1
-  // test('filter function with batchSize > 1', async () => {
-  //   let filteredStreamieWasDrained = false;
-  //   const initialStreamie = streamie((inputs: number[]) => inputs, { batchSize: 2 });
+  // Test the filter function
+  test('filter function', async () => {
+    let filteredStreamieWasDrained = false;
+    const initialStreamie = streamie(async (input: number) => input * 3, {});
 
-  //   const result: number[] = [];
-  //   const filteredStreamie = initialStreamie.filter((outputs: number[]) => {
-  //     const keep = outputs.filter(output => output % 2 === 0);
-  //     result.push(...keep);
-  //     return keep;
-  //   }, {});
-  //   filteredStreamie.onDrained(() => {
-  //     filteredStreamieWasDrained = true;
-  //     expect(result).toEqual([2, 4]);
-  //   });
+    const result: number[] = [];
+    const filteredStreamie = initialStreamie.filter((output) => output % 2 === 0, {})
+    .map((value) => result.push(value), {});
+    filteredStreamie.onDrained(() => {
+      filteredStreamieWasDrained = true;
+      expect(result).toEqual([6, 12]);
+    });
 
-  //   initialStreamie.push(1, 2, 3, 4);
-  //   initialStreamie.drain();
-  //   await filteredStreamie.promise;
-  //   expect(filteredStreamieWasDrained).toBe(true);
-  // });
+    initialStreamie.push(1, 2, 3, 4);
+    initialStreamie.drain();
+    await filteredStreamie.promise;
+    expect(filteredStreamieWasDrained).toBe(true);
+  });
+
+  // Test the filter function with batchSize > 1
+  test('filter function with batchSize > 1', async () => {
+    let filteredStreamieWasDrained = false;
+    const initialStreamie = streamie(async (input: number) => input * 3, {});
+
+    const result: number[][] = [];
+    const filteredStreamie = initialStreamie.filter((outputs) => {
+      return outputs.every(output => output % 2 === 0);
+    }, { batchSize: 3 })
+    .map((values) => {
+      result.push(values);
+    }, {});
+    filteredStreamie.onDrained(() => {
+      filteredStreamieWasDrained = true;
+      expect(result).toEqual([
+        [6, 12, 18],
+        [36],
+      ]);
+    });
+
+    initialStreamie.push(2, 4, 6, 7, 9, 11, 12);
+    initialStreamie.drain();
+    expect(filteredStreamieWasDrained).toBe(false);
+    await filteredStreamie.promise;
+    expect(filteredStreamieWasDrained).toBe(true);
+  });
+
+    // Test it all together
+  test('a combination of filter and batch size and flatten', async () => {
+    let filteredStreamieWasDrained = false;
+    let finalStreamieWasDrained = false;
+    const initialStreamie = streamie((input: number) => input, {});
+
+    const result: number[] = [];
+    const filteredStreamie = initialStreamie.filter((output) => {
+      return output % 2 === 0;
+    }, {})
+    .map((output) => {
+      return output[1] > 4;
+    }, { isFilter: true, batchSize: 2 })
+    .map((output) => {
+      return output;
+    }, { flatten: true })
+    .map((output) => {
+      return output * 2;
+    }, {})
+    
+    const final = filteredStreamie.map((final) => {
+      result.push(final);
+    }, {});
+
+    filteredStreamie.onDrained(() => {
+      filteredStreamieWasDrained = true;
+      expect(result).toEqual([12, 16]);
+    });
+
+    final.onDrained(() => {
+      finalStreamieWasDrained = true;
+    });
+
+    initialStreamie.push(1, 2, 3, 4, 5, 6, 7, 8);
+    initialStreamie.drain();
+    await filteredStreamie.promise;
+    expect(filteredStreamieWasDrained).toBe(true);
+    expect(finalStreamieWasDrained).toBe(false);
+    await final.promise;
+    expect(finalStreamieWasDrained).toBe(true);
+  });
 });

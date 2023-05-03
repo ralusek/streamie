@@ -12,52 +12,45 @@ export type UnflattenedIfConfigured<T, C extends Config> =
         : T)
     : T;
 
-export type Handler<HI, HO, C extends Config> = (input: BatchedIfConfigured<HI, C>) => UnflattenedIfConfigured<HO, C>;
+export type OutputIsInputIfFilter<IQT, OQT, C extends Config> =
+    'isFilter' extends keyof C
+    ? (C['isFilter'] extends true
+        ? IQT
+        : OQT)
+    : OQT;
 
-function test<HI, HO, const C extends Config>(
-  handler: Handler<HI, HO, C>,
-  config: C,
-): Streamie<HI, HO, C> {
-  return {
-    push: (item: HI) => {
-      // handler(config.batchSize && config.batchSize !== 1 ? [item] : item);
-    },
-    map: <NHO extends any, NC extends Config>(
-      handler: Handler<HO, NHO, NC>,
-      config: NC,
-    ) => test(handler, config),
-    filter: <NHO extends any, NC extends Omit<Config, 'isFilter'>>(
-      handler: Handler<HO, NHO, NC>,
-      config: NC,
-    ) => test(handler, config),
-    pause: (shouldPause?: boolean) => {},
-    drain: () => {},
-    registerInput: (inputStreamie: Streamie<any, any, any>) => {},
-    onBackpressureRelease: (eventHandler: () => void) => {},
-    onDrained: (eventHandler: () => void) => {},
-    onError: (eventHandler: (payload: { input: BatchedIfConfigured<HI, C>; error: any; }) => void) => {},
-    promise: new Promise(() => {}),
+export type BooleanIfFilter<OQT, C extends Config> =
+    'isFilter' extends keyof C
+    ? (C['isFilter'] extends true
+        ? boolean
+        : OQT)
+    : OQT;
 
-    state: {
-      backpressure: false,
-      isPaused: false,
-      isDrained: false,
-      isHalted: false,
-      count: {
-        handling: 0,
-      },
-    },
-  };
+export type IfFilteredElse<A, B, C extends Config> =
+    'isFilter' extends keyof C
+    ? (C['isFilter'] extends true
+        ? A
+        : B)
+    : B;
+
+// This is a type representing the streamie output. Normally, the output of the streamie
+// is the OQT of its handler. The OQT of its handler is, in the case of a streamie with
+// flattened: false, going to just be the return value of the handler function. In the case
+// of a streamie with flattened: true, the OQT of its handler is going to be the type of
+// the item extracted from the array. Said another way, if flattened: true, the return
+// value of the handler is OQT[]. In either case, what is getting put into the output queue
+// is the OQT of the handler.
+// However, if the streamie is a filter, then the output of the current streamie is just the
+// input type of its handler, as is the case with an array's native filter function. In the
+// case of an unbatched streamie, the input type of the handler is the IQT. In the case of a
+// batched streamie, the input type of the handler is IQT[]
+export type StreamieOutput<IQT, OQT, C extends Config> = OutputIsInputIfFilter<BatchedIfConfigured<IQT, C>, OQT, C>;
+
+export type Handler<IQT, OQT, C extends Config> = (input: BatchedIfConfigured<IQT, C>) => BooleanIfFilter<UnflattenedIfConfigured<OQT, C>, C> | Promise<BooleanIfFilter<UnflattenedIfConfigured<OQT, C>, C>>;
+
+function doThing<C extends Config>(config: C) {
+  const a: OutputIsInputIfFilter<BatchedIfConfigured<number, { batchSize: 1 }>, 5, { isFilter: false }> = 5;
 }
-
-const x = test<number, number[][], { batchSize: 2, flatten: false }>((input: number[]): number[][] => {
-  return [input];
-}, { batchSize: 2, flatten: false})
-// .map((input) => {
-  
-// }, { batchSize: 2});
-
-x.push(5);
 
 
 
@@ -84,33 +77,44 @@ export type Config = {
   flatten?: boolean;
 };
 
-export type Streamie<HI extends any, HO extends any, C extends Config> = {
-  push: (item: HI) => void;
+export type Streamie<IQT extends any, OQT extends any, C extends Config> = {
+  push: (item: IQT) => void;
 
   // Forks for new streamies
-  map: <NHO extends any, NC extends Config>(
-    handler: Handler<HO, NHO, NC>,
+  map: <
+    NOQT extends IfFilteredElse<
+      BatchedIfConfigured<OQT, NC>,
+      any,
+      NC
+    >,
+    NC extends Config,
+  >(
+    handler: Handler<
+      OQT,
+      NOQT,
+      NC
+    >,
     config: NC,
-  ) => Streamie<HO, NHO, NC>;
-  filter: <NHO extends any, NC extends Omit<Config, 'isFilter'>>(
-    handler: Handler<HO, NHO, NC>,
+  ) => Streamie<OQT, NOQT, NC>;
+  filter: <NC extends Omit<Config, 'isFilter'>>(
+    handler: Handler<OQT, boolean, NC>,
     config: NC,
-  ) => Streamie<HO, NHO, NC>;
+  ) => Streamie<OQT, BatchedIfConfigured<OQT, NC>, NC>;
 
   // Control flow
   pause: (shouldPause?: boolean) => void;
   drain: () => void;
 
   // Register input streamies
-  // We woudl be included to say that the "HO" of an input streamie should be
-  // the "HI" of this streamie, but we would need to know whether or not the
+  // We woudl be included to say that the "OQT" of an input streamie should be
+  // the "IQT" of this streamie, but we would need to know whether or not the
   // input streamie had been flattened.
   registerInput: (inputStreamie: Streamie<any, any, any>) => void;
 
   // Event handler registration
   onBackpressureRelease: (eventHandler: () => void) => void;
   onDrained: (eventHandler: () => void) => void;
-  onError: (eventHandler: (payload: { input: BatchedIfConfigured<HI, C>, error: any }) => void) => void;
+  onError: (eventHandler: (payload: { input: BatchedIfConfigured<IQT, C>, error: any }) => void) => void;
 
   // Public state
   state: {
