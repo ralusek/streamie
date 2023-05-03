@@ -55,8 +55,8 @@ function doThing<C extends Config>(config: C) {
 
 
 export type Config = {
-  // The number of items that can be in the input queue before backpressure will output as true.
-  // New items can still always be added to the queue, but respectful consumers will wait for
+  // The number of items that can be in the output queue before backpressure will output as true.
+  // New items can still always be added to the input queue, but respectful consumers will wait for
   // backpressure to be false before adding more.
   backpressureAt?: number;
   // The number of items which can be processed concurrently.

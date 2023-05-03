@@ -65,7 +65,7 @@ export default function streamie<
     },
     lastHandledAt: null,
     get backpressure() {
-      return queue.input.length >= settings.backpressureAt;
+      return queue.output.success.length >= settings.backpressureAt;
     },
     get isDrained() {
       return state.shouldDrain && (queue.input.length === 0) && (state.count.handling === 0) && (queue.output.success.length === 0);
