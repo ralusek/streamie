@@ -12,7 +12,10 @@ export default function streamie<
   const C extends Config,
 >(
   handler: Handler<IQT, OQT, C>,
-  config: C,
+  config: C & {
+    // When calling streamie directly, we allow a seed value to be passed
+    seed?: IQT;
+  },
 ) {
   const queue: {
     input: IQT[];
@@ -354,6 +357,8 @@ export default function streamie<
       if (settings.haltOnError) onError(({ error }) => reject(error));
     }),
   } satisfies Streamie<IQT, OQT, C>;
+
+  if (config.seed !== undefined) setTimeout(() => self.push(config.seed!), 0);
 
   return self;
 }

@@ -24,15 +24,13 @@ describe('Streamie', () => {
         if (!data) return self.drain();
         push(index + 1); // This goes to the input queue
         return data; // This goes to the output queue
-      }, {});
+      }, { seed: 0 });
 
       const remainder = initialStreamie
       .filter((letter, { index }) => index % 2 === 0, {})
       .map((letter) => {
         if (letter) result.push(letter);
       }, {});
-
-      initialStreamie.push(0);
 
       await remainder.promise;
       expect(result).toEqual(FILTERED);
