@@ -9,95 +9,163 @@
 ### What is a streamie?
 
 A streamie is an alternative to promises, streams, async iterators, arrays, and reactive observables like rxJS or Highland.
+It provides a wide array of features like pagination, mapping, filtering, batching, flattening, and concurrency control.
 
 ### Why should I use a streamie?
 
-1.) A `streamie` has useful iterator methods like `.map`, `.flatMap`, `.reduce`, `.filter`, `.find`, `.push`, and `.concat` on an infinite, asynchronous collection. All handler functions in these iterators are themselves asynchronous, so promises returned in them will be awaited for the item to have been considered processed and the queue to progress.
+Because it's the simplest and most familiar interface for common but complex behaviors on indefinite data.
 
-2.) A `streamie` generates many useful metrics while running to indicate, for example, how many items are being processed per second, or the average time taken to handle an item.
+1.) A `streamie` has useful iterator methods like `.map`, `.filter`, and `.push` on an infinite, asynchronous collection. All handler functions in these iterators are themselves asynchronous, so promises returned in them will be awaited for the item to have been considered processed and the queue to progress.
 
-3.) A `streamie` offers an extremely simple interface for modifying control flow through various asynchronous activities, notably:
+2.) A `streamie` offers an extremely simple interface for modifying control flow through various asynchronous activities, notably:
   - `concurrency`: for any iterative method, a `concurrency` can be specified to parallelize that asynchronous action
   - `batching`/`flattening`: for any iterative method, a `batchSize` can be specified to allow a batching of inputs up to this count before executing the iterator method. Likewise a `flatten`: `true` may be specified to flatten the input of the an iterator method.
   - `backpressure`: backpressure is **automatically** handled so that asynchronous tasks at different points in the pipeline cannot iterate beyond what its outputs are capable of handling.
 
-4.) A `streamie` plays nicely with many other similar utilities, such as promises and streams. It can be outputted as a promise, or have a stream inputted or outputted.
+3.) Fully typed in TypeScript with inference in most cases.
 
+Seriously, check out this interface.
 
-### Live Demo:
-https://codesandbox.io/s/9j8y4mm1z4
+# Installation
+`npm install --save streamie`
 
+# Examples
 
-### How do I use streamie?
+## Pagination
+```ts
+const paginator = streamie(async (page: number, { self }) => {
+  // Fetch data from an API or other source.
+  const data = await fetchData(page);
+  // If there's more data, push a new item into the streamie queue for handling.
+  if (data.hasMore) {
+    self.push(page + 1);
+  }
+  // Return the data to be processed by downstream functions.
+  return data.items;
+}, {});
 
-`$ npm install --save streamie`
-
-Assume we have the following asynchronous actions:
-
-```js
-// Gets 500 company names from a list of public companies.
-// Returns format array of strings.
-getCompanyNames({page: 1});
+// Start the streamie with the first page.
+paginator.push(0);
 ```
 
-```js
-// Accepts up to 5 company names and returns company stock prices.
-// Returns format array of `{name, price}`
-getCompanyStockPrices(['Apple', 'Google', 'Facebook', 'Tesla', 'Microsoft']);
+Note, data sources like this which are producing their own inputs can be self-seeded
+like this:
+
+```ts
+const paginator = streamie(async (page: number, { self }) => {
+  // Fetch data from an API or other source.
+  const data = await fetchData(page);
+  // If there's more data, push a new item into the streamie queue for handling.
+  if (data.hasMore) {
+    self.push(page + 1);
+  }
+  // Return the data to be processed by downstream functions.
+  return data.items;
+}, { seed: 0 }); // Automatically push this in as a starting value to begin processing
 ```
 
-```js
-// Saves up to 30 companies stock prices in our database.
-bulkSaveCompanyStocks([{name: 'Apple', price: 5}, {name: 'Google', price: 6}]);
+## Flattening
+
+Well, imagine that this `fetchData` returns 50 items at a time, and we want to handle them
+individually for some purpose.
+
+We can begin by flattening the output of this streamie, so rather than streaming out in
+chunks of 50, they stream out as individual items.
+
+```ts
+const paginator = streamie(async (page: number, { self }) => {
+  const data = await fetchData(page);
+  if (data.hasMore) {
+    self.push(page + 1);
+  }
+  return data.items;
+}, { seed: 0, flatten: true });
 ```
 
-We want to pull the company names, get the stock prices, and save all of the companies with a price greater than "5" to our db.
+Now's let's do an example of handling them individually
 
-Some considerations are:
-
-- `getCompanyNames` can handle 3 concurrent requests, each returning a batch 500 items
-- `getCompanyStockPrices` can handle 20 concurrent requests, and expects up 5 items at once in a given call
-- `bulkSaveCompanyStocks` can handle 10 concurrent requests, and expects up to 30 items at once in a given call
-
-Using `streamie`, defining this job is this simple:
-
-```js
-// Returns a streamie that outputs individual company names as they're loaded.
-getAllCompanyNames()
-// Batches 5 items before calling handler, calls 20 handlers concurrently
-.map(names => getCompanyStockPrices(names), {concurrency: 20, batch: 5})
-// Flattens out the array input so that the handler is called for the individual items.
-.filter(({price}) => price > 5, {flatten: true})
-.map(stocks => bulkSaveCompanyStocks(stocks), {concurrency: 10, batch: 30});
+```ts
+paginator
+.map((item: Item) => {
+  return doSomethingIndividually(item);
+}, {});
 ```
 
-Easy!
+## Batching
 
+Or we can go in the opposite direction, where we're then going to take these individual items
+streaming out, and we have an api we can use that can accept 10 of them in a single request.
+By using batchSize, anything > 1 will group up the inputs into a batch of that size prior to
+calling the handler.
 
-Now let's define `getAllCompanyNames` to load all of the company names and output them individually:
-
-
-```js
-const { source } = require('streamie');
-
-function getAllCompanyNames() {
-  // The `source` method is the easiest way to create a streamie.
-  // Here we pass it a `handler` function, whose first argument is what is pushed
-  // into the streamie using `.push()` on the streamie. `undefined` is pushed in
-  // automaticaly to kickstart the process, so we default to a value of 1 in order
-  // to load the first page.
-
-  // The `streamie` passed in the second argument is this instance, and can be used to
-  // `push` new items to be handled, in this case, the next page.
-  return source((page = 1, { streamie }) => {
-    return getCompanyNames({page})
-    .then(results => {
-      if (results.length) streamie.push(page + 1); // If there were results, we'll query for the next set
-      else streamie.complete(); // If there were no results, we'll indicate that the streamie is done.
-      return results;
-    });
-  })
-  // Flatten the array results so that we are outputting individual company names.
-  .flatMap();
-}
+```ts
+paginator
+.map((items: Item[]) => {
+  return upload10AtATime(items);
+}, { batchSize: 10 });
 ```
+
+## Concurrency
+
+Well what if this API let us do that, and said we could upload 10 in a single request, and perform
+5 of those requests simultaneously?
+
+```ts
+paginator
+.map((items: Item[]) => {
+  return upload10AtATime(items);
+}, { batchSize: 10, concurrency: 5 });
+```
+
+## Draining/Completion/Promises
+
+And what happens when we're done? Well, you can call `streamie.drain()` to drain the remainder of the items.
+If a batchSize is in effect, the final batch during draining is allowed to be less than that number in order
+to fully drain. Upstream streamies will signal to downstream ones to drain when all of their inputs have
+drained.
+
+Every streamie returns a promise that will be resolved upon being fully drained. A streamie's handler can also
+drain itself, such as the case with our paginator:
+
+```ts
+const paginator = streamie(async (page: number, { self }) => {
+  const data = await fetchData(page);
+  if (data.hasMore) {
+    self.push(page + 1);
+  } else self.drain();
+  return data.items;
+}, { seed: 0, flatten: true });
+```
+
+And to mark the process complete with the promise, here's the whole thing:
+
+```ts
+await paginator
+.map((items: Item[]) => {
+  return upload10AtATime(items);
+}, { batchSize: 10, concurrency: 5 })
+.promise;
+
+// Here, the process is complete.
+```
+
+## Typescript
+
+In most cases, the types can be inferred, however, if you have certain combinations of
+modifiers, Typescript struggles to infer correctly. The generics have a simple interface
+for specifying the input queue item type and the output item queue type, as well as the
+config object.
+
+The generics are specified like this:
+```ts
+streamie<number, number[], { batchSize: 2}>(
+  (inputs: number[]) => inputs.map(input => input * 2),
+  { batchSize: 2 }
+);
+```
+
+# Contributing
+We welcome contributions! Please see our contributing guidelines for more information.
+
+# License
+MIT
