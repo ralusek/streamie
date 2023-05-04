@@ -159,7 +159,7 @@ export default function streamie<
         },
       );
 
-
+      // Only wrapped in an IIFE to allow for early returns.
       (() => {
         // If the handler is a filter, the return value is a boolean, and if the return value is false, we
         // do not push to the output queue. If the output is truthy, we pass the input through to
@@ -290,7 +290,10 @@ export default function streamie<
 
   function drain() {
     state.shouldDrain = true;
-    requestProcessInput();
+    // Move to next tick to allow for a final push to output queue. Items can still be pushed
+    // to the output queue while draining, but if the streamie is considered drained immediately
+    // upon draining, then the onDrained event will be fired before the final push to the output.
+    setTimeout(() => requestProcessInput());
   }
 
   // This registers an input streamie, so that this streamie can be triggered to drain
