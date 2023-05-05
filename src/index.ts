@@ -70,10 +70,15 @@ export default function streamie<
     },
     lastHandledAt: null,
     get backpressure() {
-      // We base backpressure off of the output queue. This also takes into account child
-      // streamies, as their own backpressure will prevent the output queue from outputting,
-      // and will cause it to exceed this threshold.
-      return queue.output.success.length >= settings.backpressureAt;
+      // Backpressure is based off of both the input and output queues. If the input queue
+      // is full, it's not processing fast enough to continue receiving more inputs, so we
+      // should alert inputs to slow down.
+      // If the output queue is full, the outputs are not processing fast enough for the
+      // queue to drain, so we should likewise alert our inputs to slow down. This also accounts
+      // for cases where our output queue is not draining explicitly because the outputs have
+      // alerted us to their own backpressure.
+      // Lastly, we also include the amount currently handling in the backpressure calculation.
+      return  queue.input.length + queue.output.success.length + state.count.handling >= settings.backpressureAt;
     },
     get isDrained() {
       return state.shouldDrain && (queue.input.length === 0) && (state.count.handling === 0) && (queue.output.success.length === 0);
@@ -84,16 +89,18 @@ export default function streamie<
     hasHandledOnDrained: false,
   };
 
-  const consumers: Streamie<OQT, any, any>[] = []
-  const inputStreamies: Streamie<any, any, any>[] = [];
+  const consumers: Set<Streamie<OQT, any, any>> = new Set();
+  const inputStreamies: Set<Streamie<any, IQT, any>> = new Set();
 
   const eventHandlers: {
     onBackpressureRelease: Set<() => void>;
     onDrained: Set<() => void>;
+    onDraining: Set<() => void>;
     onError: Set<(payload: { input: BatchedIfConfigured<IQT, C>, error: any }) => void>;
   } = {
     onBackpressureRelease: new Set(),
     onDrained: new Set(),
+    onDraining: new Set(),
     onError: new Set(),
   };
 
@@ -204,7 +211,7 @@ export default function streamie<
     // TODO should allow different strategies, but for now we will say that if any consumer
     // is backpressured, no other consumers will be pushed to, as this could allow a queue
     // to grow indefinitely.
-    if (consumers.some((consumer) => consumer.state.backpressure)) return;
+    if (Array.from(consumers).some((consumer) => consumer.state.backpressure)) return;
 
     const success = queue.output.success.shift();
     consumers.forEach((consumer) => {
@@ -261,10 +268,7 @@ export default function streamie<
   ): Streamie<OQT, NOQT, NC> {
     const nextStreamie = streamie(handler, config) as Streamie<OQT, NOQT, NC>;
 
-    nextStreamie.onBackpressureRelease(() => requestProcessOutput());
-    nextStreamie.registerInput(self);
-
-    consumers.push(nextStreamie);
+    registerOutput(nextStreamie);
 
     return nextStreamie;
   }
@@ -289,7 +293,9 @@ export default function streamie<
   }
 
   function drain() {
+    if (state.shouldDrain) return;
     state.shouldDrain = true;
+    eventHandlers.onDraining.forEach((eventHandler) => eventHandler());
     // Move to next tick to allow for a final push to output queue. Items can still be pushed
     // to the output queue while draining, but if the streamie is considered drained immediately
     // upon draining, then the onDrained event will be fired before the final push to the output.
@@ -298,13 +304,28 @@ export default function streamie<
 
   // This registers an input streamie, so that this streamie can be triggered to drain
   // in the event that all of its input streamies are drained.
-  function registerInput(inputStreamie: Streamie<any, any, any>) {
-    inputStreamies.push(inputStreamie);
+  function registerInput(inputStreamie: Streamie<any, IQT, any>) {
+    if (inputStreamies.has(inputStreamie)) return;
+    inputStreamies.add(inputStreamie);
     inputStreamie.onDrained(() => {
-      if (inputStreamies.every((inputStreamie) => inputStreamie.state.isDrained)) {
+      if (Array.from(inputStreamies).every((inputStreamie) => inputStreamie.state.isDrained)) {
         drain();
       }
     });
+
+    inputStreamie.registerOutput(self);
+  }
+
+  function registerOutput(outputStreamie: Streamie<OQT, any, any>) {
+    if (consumers.has(outputStreamie)) return;
+    consumers.add(outputStreamie);
+    outputStreamie.onBackpressureRelease(() => requestProcessOutput());
+
+    // This would be a strange scenario, but it's not disallowed. If a streamie
+    // with inputs is set to drain, we simply remove it as an output.
+    outputStreamie.onDraining(() => consumers.delete(outputStreamie));
+
+    outputStreamie.registerInput(self);
   }
 
   function onBackpressureRelease(eventHandler: () => void) {
@@ -314,6 +335,11 @@ export default function streamie<
   function onDrained(eventHandler: () => void) {
     if (state.isDrained) return eventHandler();
     eventHandlers.onDrained.add(eventHandler);
+  }
+
+  function onDraining(eventHandler: () => void) {
+    if (state.shouldDrain) return eventHandler();
+    eventHandlers.onDraining.add(eventHandler);
   }
 
   function onError(eventHandler: (payload: { input: BatchedIfConfigured<IQT, C>, error: any }) => void) {
@@ -329,6 +355,7 @@ export default function streamie<
     drain,
 
     registerInput,
+    registerOutput,
 
     state: {
       get backpressure() {
@@ -352,6 +379,7 @@ export default function streamie<
 
     onBackpressureRelease,
     onDrained,
+    onDraining,
     onError,
 
     promise: new Promise((resolve, reject) => {

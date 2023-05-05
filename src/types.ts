@@ -98,11 +98,13 @@ export type Streamie<IQT extends any, OQT extends any, C extends Config> = {
   // We woudl be included to say that the "OQT" of an input streamie should be
   // the "IQT" of this streamie, but we would need to know whether or not the
   // input streamie had been flattened.
-  registerInput: (inputStreamie: Streamie<any, any, any>) => void;
+  registerInput: (inputStreamie: Streamie<any, IQT, any>) => void;
+  registerOutput: (outputStreamie: Streamie<OQT, any, any>) => void;
 
   // Event handler registration
   onBackpressureRelease: (eventHandler: () => void) => void;
   onDrained: (eventHandler: () => void) => void;
+  onDraining: (eventHandler: () => void) => void;
   onError: (eventHandler: (payload: { input: BatchedIfConfigured<IQT, C>, error: any }) => void) => void;
 
   // Public state
