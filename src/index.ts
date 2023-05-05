@@ -1,4 +1,8 @@
+// Types
 import { Streamie, Handler, Config, BatchedIfConfigured, UnflattenedIfConfigured, BooleanIfFilter, OutputIsInputIfFilter, IfFilteredElse } from './types';
+
+// Validation
+import * as validate from './validation';
 
 export default function streamie<
   IQT extends any,
@@ -35,6 +39,7 @@ export default function streamie<
       }[];
     };
   } = {
+    // TODO make these linked lists
     input: [],
     output: {
       success: [],
@@ -42,7 +47,7 @@ export default function streamie<
   };
 
   const settings = {
-    backpressureAt: config.backpressureAt || Infinity,
+    backpressureAt: validate.backpressureAt(config),
     concurrency: config.concurrency || 1,
     batchSize: config.batchSize || 1,
     maxBatchWait: config.maxBatchWait || Infinity,
@@ -57,7 +62,10 @@ export default function streamie<
       handling: number;
     };
     lastHandledAt: number | null;
-    backpressure: boolean;
+    backpressure: {
+      input: boolean;
+      output: boolean;
+    };
     isDrained: boolean;
     isPaused: boolean;
     shouldDrain: boolean;
@@ -69,16 +77,19 @@ export default function streamie<
       handling: 0,
     },
     lastHandledAt: null,
-    get backpressure() {
-      // Backpressure is based off of both the input and output queues. If the input queue
-      // is full, it's not processing fast enough to continue receiving more inputs, so we
-      // should alert inputs to slow down.
-      // If the output queue is full, the outputs are not processing fast enough for the
-      // queue to drain, so we should likewise alert our inputs to slow down. This also accounts
-      // for cases where our output queue is not draining explicitly because the outputs have
-      // alerted us to their own backpressure.
-      // Lastly, we also include the amount currently handling in the backpressure calculation.
-      return  queue.input.length + queue.output.success.length + state.count.handling >= settings.backpressureAt;
+    // Backpressure slowly builds backwards. If you imagine that a downstream streamie has input backpressure,
+    // this streamie will stop pushing to it. This means that eventually this streamie will have output backpressure,
+    // and we will stop handling items. This means that eventually this streamie will have input backpressure, and
+    // upstream streamies will stop pushing to it... and so on.
+    backpressure: {
+      // When the input queue is too long, upstream streamies should stop pushing items into the queue.
+      get input() {
+        return queue.input.length >= settings.backpressureAt.input;
+      },
+      // When the output queue is too long, this streamie should stop handling items.
+      get output() {
+        return (queue.output.success.length + state.count.handling) >= settings.backpressureAt.output;
+      },
     },
     get isDrained() {
       return state.shouldDrain && (queue.input.length === 0) && (state.count.handling === 0) && (queue.output.success.length === 0);
@@ -89,7 +100,7 @@ export default function streamie<
     hasHandledOnDrained: false,
   };
 
-  const consumers: Set<Streamie<OQT, any, any>> = new Set();
+  const outputStreamies: Set<Streamie<OQT, any, any>> = new Set();
   const inputStreamies: Set<Streamie<any, IQT, any>> = new Set();
 
   const eventHandlers: {
@@ -110,6 +121,7 @@ export default function streamie<
   async function processInput() {
     if (state.isPaused || state.isHalted || state.isDrained) return;
     if (queue.input.length === 0) return;
+    if (state.backpressure.output) return;
     const timeSinceLastHandled = state.lastHandledAt && Date.now() - state.lastHandledAt;
 
     // This top level condition establishes a normal condition under which we would not handle
@@ -140,7 +152,7 @@ export default function streamie<
     }
     if (state.count.handling >= settings.concurrency) return;
 
-    const startedWithBackpressure = state.backpressure;
+    const startedWithBackpressure = state.backpressure.input;
 
     state.lastHandledAt = Date.now();
     state.count.handling++;
@@ -151,7 +163,7 @@ export default function streamie<
     // we begin another attempt to process items.
     requestProcessInput();
 
-    if (startedWithBackpressure && !state.backpressure) {
+    if (startedWithBackpressure && !state.backpressure.input) {
       eventHandlers.onBackpressureRelease.forEach((eventHandler) => {
         eventHandler();
       });
@@ -209,16 +221,17 @@ export default function streamie<
     if (state.isPaused || state.isHalted || state.isDrained) return;
     if (queue.output.success.length === 0) return;
     // TODO should allow different strategies, but for now we will say that if any consumer
-    // is backpressured, no other consumers will be pushed to, as this could allow a queue
+    // is backpressured, no other outputStreamies will be pushed to, as this could allow a queue
     // to grow indefinitely.
-    if (Array.from(consumers).some((consumer) => consumer.state.backpressure)) return;
+    if (Array.from(outputStreamies).some((consumer) => consumer.state.backpressure.input)) return;
 
     const success = queue.output.success.shift();
-    consumers.forEach((consumer) => {
+    outputStreamies.forEach((consumer) => {
       consumer.push(success!.output);
     });
 
     requestProcessOutput();
+    requestProcessInput();
   }
 
 
@@ -317,13 +330,13 @@ export default function streamie<
   }
 
   function registerOutput(outputStreamie: Streamie<OQT, any, any>) {
-    if (consumers.has(outputStreamie)) return;
-    consumers.add(outputStreamie);
+    if (outputStreamies.has(outputStreamie)) return;
+    outputStreamies.add(outputStreamie);
     outputStreamie.onBackpressureRelease(() => requestProcessOutput());
 
     // This would be a strange scenario, but it's not disallowed. If a streamie
     // with inputs is set to drain, we simply remove it as an output.
-    outputStreamie.onDraining(() => consumers.delete(outputStreamie));
+    outputStreamie.onDraining(() => outputStreamies.delete(outputStreamie));
 
     outputStreamie.registerInput(self);
   }
@@ -363,7 +376,12 @@ export default function streamie<
       },
       get count() {
         return {
-          ...state.count,
+          started: state.count.started,
+          handling: state.count.handling,
+          queued: {
+            get input() { return queue.input.length; },
+            get output() { return queue.output.success.length; },
+          },
         };
       },
       get isPaused() {

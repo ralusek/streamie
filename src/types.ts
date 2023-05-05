@@ -44,10 +44,21 @@ type Tools<IQT, OQT, C extends Config> = {
 
 
 export type Config = {
-  // The number of items that can be in the output queue before backpressure will output as true.
-  // New items can still always be added to the input queue, but respectful consumers will wait for
-  // backpressure to be false before adding more.
-  backpressureAt?: number;
+  // The number of items that can be queued before backpressure is applied. Backpressure will
+  // alert upstream streamies that they should stop pushing items into the queue until the
+  // downstream streamie has processed some items.
+  // If passing a number, it will be applied to both input and output queues, for a total of
+  // 2 * backpressureAt items allowed in the queue.
+  // Input backpressure is how many items can be pushed into the input queue before backpressure
+  // is applied.
+  // Output backpressure is how many items can be pushed into the output queue before backpressure
+  // is applied.
+  // Output backpressure will be used to determine if this streamie should pause handling items,
+  // whereas input backpressure will be used to determine if upstream streamies should pause.
+  backpressureAt?: number | {
+    input?: number;
+    output?: number;
+  };
   // The number of items which can be processed concurrently.
   concurrency?: number;
   // The number of items that should wait to be processed in a single handler call. Fewer items will
@@ -109,12 +120,20 @@ export type Streamie<IQT extends any, OQT extends any, C extends Config> = {
 
   // Public state
   state: {
-    backpressure: boolean;
+    backpressure: {
+      input: boolean;
+      output: boolean;
+    };
     isPaused: boolean;
     isDrained: boolean;
     isHalted: boolean;
     count: {
       handling: number;
+      started: number;
+      queued: {
+        input: number;
+        output: number;
+      };
     };
   };
 
