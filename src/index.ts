@@ -1,4 +1,5 @@
 // Types
+import { StreamieQueueError } from './error';
 import { Streamie, Handler, Config, BatchedIfConfigured, UnflattenedIfConfigured, BooleanIfFilter, OutputIsInputIfFilter, IfFilteredElse } from './types';
 
 // Validation
@@ -51,9 +52,10 @@ export default function streamie<
     concurrency: config.concurrency || 1,
     batchSize: config.batchSize || 1,
     maxBatchWait: config.maxBatchWait || Infinity,
-    isFilter: config.isFilter || false,
-    haltOnError: config.haltOnError || false,
-    flatten: config.flatten || false,
+    isFilter: config.isFilter === true,
+    haltOnError: config.haltOnError !== false,
+    flatten: config.flatten === true,
+    propagateErrors: config.propagateErrors !== false,
   };
 
   const state: {
@@ -107,12 +109,14 @@ export default function streamie<
     onBackpressureRelease: Set<() => void>;
     onDrained: Set<() => void>;
     onDraining: Set<() => void>;
-    onError: Set<(payload: { input: BatchedIfConfigured<IQT, C>, error: any }) => void>;
+    onError: Set<(error: StreamieQueueError<IQT, C>) => void>;
+    onHalted: Set<() => void>;
   } = {
     onBackpressureRelease: new Set(),
     onDrained: new Set(),
     onDraining: new Set(),
     onError: new Set(),
+    onHalted: new Set(),
   };
 
   let maxBatchWaitTimeout: NodeJS.Timeout | null = null;
@@ -169,12 +173,14 @@ export default function streamie<
       });
     }
 
+    const index = state.count.started++;
+
     try {
       const handlerOutput: BooleanIfFilter<UnflattenedIfConfigured<OQT, C>, C> = await handler(
         handlerInput, {
           self,
           push: self.push,
-          index: state.count.started++,
+          index,
         },
       );
 
@@ -206,10 +212,18 @@ export default function streamie<
         else successQueue.push({ input: handlerInput, output: handlerOutput as OQT });
       })();
     } catch (err) {
-      if (settings.haltOnError) state.isHalted = true;
-      eventHandlers.onError.forEach((eventHandler) => {
-        eventHandler({ input: handlerInput, error: err });
-      });
+      const queueError = new StreamieQueueError(
+        // @ts-ignore
+        `Encountered an error while processing input: ${err?.message || ''}`,
+        err,
+        {
+          input: handlerInput,
+          index,
+          timestamp: Date.now(),
+        },
+      );
+
+      handleOnError(queueError);
     }
     state.count.handling--;
 
@@ -249,10 +263,37 @@ export default function streamie<
     if (state.isDrained) handleOnDrained();
   }
 
+  function handleOnError(queueError: StreamieQueueError<IQT, C>) {
+    // If this stream is configured to haltOnError, then its own promise
+    // will have registered on onError listener to reject the promise, which
+    // will be invoked here.
+    eventHandlers.onError.forEach((eventHandler) => {
+      eventHandler(queueError);
+    });
+
+    if (settings.propagateErrors) {
+      outputStreamies.forEach((consumer) => {
+        consumer._pushQueueError(queueError);
+      });
+    }
+
+    // Important to do this at the end so errors can be handled before children
+    // are removed from halting
+    if (settings.haltOnError) setHalted();
+  }
+
   function handleOnDrained() {
     if (!state.isDrained || state.hasHandledOnDrained) return;
     state.hasHandledOnDrained = true;
     eventHandlers.onDrained.forEach((eventHandler) => {
+      eventHandler();
+    });
+  }
+
+  function setHalted() {
+    if (state.isHalted) return;
+    state.isHalted = true;
+    eventHandlers.onHalted.forEach((eventHandler) => {
       eventHandler();
     });
   }
@@ -318,21 +359,37 @@ export default function streamie<
   // This registers an input streamie, so that this streamie can be triggered to drain
   // in the event that all of its input streamies are drained.
   function registerInput(inputStreamie: Streamie<any, IQT, any>) {
+    if (state.isDrained) throw new Error('Cannot register an input on a drained streamie.');
+    if (inputStreamie.state.isDrained) throw new Error('Cannot register a drained streamie as an input.');
+    if (state.isHalted) throw new Error('Cannot register an input on a halted streamie.');
+    if (inputStreamie.state.isHalted) throw new Error('Cannot register a halted streamie as an input.');
     if (inputStreamies.has(inputStreamie)) return;
     inputStreamies.add(inputStreamie);
-    inputStreamie.onDrained(() => {
-      if (Array.from(inputStreamies).every((inputStreamie) => inputStreamie.state.isDrained)) {
-        drain();
-      }
+
+    inputStreamie.onDrained(drainIfAllInputsDrained);
+    inputStreamie.onHalted(() => {
+      inputStreamies.delete(inputStreamie);
+      drainIfAllInputsDrained();
     });
 
     inputStreamie.registerOutput(self);
+
+    function drainIfAllInputsDrained() {
+      if (Array.from(inputStreamies).every((inputStreamie) => inputStreamie.state.isDrained)) {
+        drain();
+      }
+    }
   }
 
   function registerOutput(outputStreamie: Streamie<OQT, any, any>) {
+    if (state.isDrained) throw new Error('Cannot register an output on a drained streamie.');
+    if (outputStreamie.state.isDrained) throw new Error('Cannot register a drained streamie as an output.');
+    if (state.isHalted) throw new Error('Cannot register an output on a halted streamie.');
+    if (outputStreamie.state.isHalted) throw new Error('Cannot register a halted streamie as an output.');
     if (outputStreamies.has(outputStreamie)) return;
     outputStreamies.add(outputStreamie);
     outputStreamie.onBackpressureRelease(() => requestProcessOutput());
+    outputStreamie.onHalted(() => outputStreamies.delete(outputStreamie));
 
     // This would be a strange scenario, but it's not disallowed. If a streamie
     // with inputs is set to drain, we simply remove it as an output.
@@ -355,8 +412,24 @@ export default function streamie<
     eventHandlers.onDraining.add(eventHandler);
   }
 
-  function onError(eventHandler: (payload: { input: BatchedIfConfigured<IQT, C>, error: any }) => void) {
+  function onError(eventHandler: (error: StreamieQueueError<IQT, C>) => void) {
     eventHandlers.onError.add(eventHandler);
+  }
+
+  function onHalted(eventHandler: () => void) {
+    if (state.isHalted) return eventHandler();
+    eventHandlers.onHalted.add(eventHandler);
+  }
+
+  // Private functions
+
+  // This is to allow upstream streamies to propagate errors. Should not be invoked for
+  // another reason. We can't know the type generics because it could have been passed
+  // from a parent of a parent, etc.
+  function _pushQueueError(error: StreamieQueueError<any, any>) {
+    // TODO maybe at some point we should distinguish between whether "shouldPropagateErrors"
+    // means "should I pass my errors on" vs "should I allow other errors to be passed on to me"
+    if (settings.propagateErrors) handleOnError(error);
   }
 
   const self = {
@@ -399,11 +472,14 @@ export default function streamie<
     onDrained,
     onDraining,
     onError,
+    onHalted,
+
+    _pushQueueError,
 
     promise: new Promise((resolve, reject) => {
       onDrained(() => resolve(null));
 
-      if (settings.haltOnError) onError(({ error }) => reject(error));
+      if (settings.haltOnError) onError((error) => reject(error));
     }),
   } satisfies Streamie<IQT, OQT, C>;
 

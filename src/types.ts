@@ -1,3 +1,5 @@
+import { StreamieQueueError } from './error';
+
 export type BatchedIfConfigured<T, C extends Config> =
     'batchSize' extends keyof C
     ? (C['batchSize'] extends (1 | undefined)
@@ -75,6 +77,8 @@ export type Config = {
   haltOnError?: boolean;
   // Should flatten the output.
   flatten?: boolean;
+  // Whether errors should be passed downstream.
+  propagateErrors?: boolean;
 };
 
 export type Streamie<IQT extends any, OQT extends any, C extends Config> = {
@@ -106,8 +110,8 @@ export type Streamie<IQT extends any, OQT extends any, C extends Config> = {
   drain: () => void;
 
   // Register input streamies
-  // We woudl be included to say that the "OQT" of an input streamie should be
-  // the "IQT" of this streamie, but we would need to know whether or not the
+  // We woudl be included to say that the 'OQT' of an input streamie should be
+  // the 'IQT' of this streamie, but we would need to know whether or not the
   // input streamie had been flattened.
   registerInput: (inputStreamie: Streamie<any, IQT, any>) => void;
   registerOutput: (outputStreamie: Streamie<OQT, any, any>) => void;
@@ -116,7 +120,13 @@ export type Streamie<IQT extends any, OQT extends any, C extends Config> = {
   onBackpressureRelease: (eventHandler: () => void) => void;
   onDrained: (eventHandler: () => void) => void;
   onDraining: (eventHandler: () => void) => void;
-  onError: (eventHandler: (payload: { input: BatchedIfConfigured<IQT, C>, error: any }) => void) => void;
+  onError: (eventHandler: (error: StreamieQueueError<IQT, C>) => void) => void;
+  onHalted: (eventHandler: () => void) => void;
+
+  // This is to allow upstream streamies to propagate errors. Should not be invoked for
+  // another reason. We can't know the type generics because it could have been passed
+  // from a parent of a parent, etc.
+  _pushQueueError: (error: StreamieQueueError<any, any>) => void;
 
   // Public state
   state: {
