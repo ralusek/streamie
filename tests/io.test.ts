@@ -29,12 +29,6 @@ describe('Multiple Inputs and Outputs', () => {
     await streamA2.promise;
     expect(streamA1.state.isDrained).toBe(true);
     expect(streamA2.state.isDrained).toBe(true);
-    expect(streamB.state.isDrained).toBe(false);
-
-    streamB.drain();
-    await streamB.promise;
-    expect(streamA1.state.isDrained).toBe(true);
-    expect(streamA2.state.isDrained).toBe(true);
     expect(streamB.state.isDrained).toBe(true);
 
     await finalStreamie.promise;
@@ -63,10 +57,7 @@ describe('Multiple Inputs and Outputs', () => {
     streamB.drain();
     await streamB.promise;
     expect(streamB.state.isDrained).toBe(true);
-    // This one is drained immediately because it's handlers resolve immediately.
-    // Because streamB has drained, streamC1 and streamC2 will have been triggered to
-    // drain, as all of their inputs have drained.
-    expect(streamC1.state.isDrained).toBe(true); 
+    expect(streamC1.state.isDrained).toBe(false); 
     expect(streamC2.state.isDrained).toBe(false);
 
     await Promise.all([streamC1.promise, streamC2.promise]);

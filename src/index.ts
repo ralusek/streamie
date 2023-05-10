@@ -123,49 +123,12 @@ export default function streamie<
 
   // Internal functions
   async function processInput() {
-    if (state.isPaused || state.isHalted || state.isDrained) return;
-    if (queue.input.length === 0) return;
-    if (state.backpressure.output) return;
-    const timeSinceLastHandled = state.lastHandledAt && Date.now() - state.lastHandledAt;
-
-    // This top level condition establishes a normal condition under which we would not handle
-    // the items, as there aren't enough to justify a batch. However, we will handle them
-    // given the exceptions below
-    if (queue.input.length < settings.batchSize) {
-      if (
-        // If the queue is meant to be drained, even if the input queue is not a full batch,
-        // we will still handle it.
-        (!state.shouldDrain) &&
-        // If we have waited too long since the last handled batch, we will handle the items
-        !(timeSinceLastHandled && (timeSinceLastHandled > settings.maxBatchWait))
-      ) {
-        
-        // At this point, we're already not going to handle the items the process, but if
-        // there is a maxBatchWait configured, we will ensure that there is a timeout in place
-        // to call processInput after the maxBatchWait time has elapsed. This is because the
-        // qualification for maxBatchWait time could elapse and be qualified for a process, but
-        // no attempt to process would necessarily be invoked at that time.
-        if (settings.maxBatchWait && (settings.maxBatchWait !== Infinity)) {
-          if (maxBatchWaitTimeout) clearTimeout(maxBatchWaitTimeout);
-          maxBatchWaitTimeout = setTimeout(() => {
-            requestProcessInput();
-          }, settings.maxBatchWait - (timeSinceLastHandled || 0));
-        }
-        return;
-      }
-    }
-    if (state.count.handling >= settings.concurrency) return;
-
     const startedWithBackpressure = state.backpressure.input;
 
     state.lastHandledAt = Date.now();
     state.count.handling++;
     const itemsToHandle = queue.input.splice(0, settings.batchSize);
     const handlerInput = (settings.batchSize === 1 ? itemsToHandle[0] : itemsToHandle) as BatchedIfConfigured<IQT, C>;
-
-    // Since we're in a valid state to process items and we're not yet at concurrency limit,
-    // we begin another attempt to process items.
-    requestProcessInput();
 
     if (startedWithBackpressure && !state.backpressure.input) {
       eventHandlers.onBackpressureRelease.forEach((eventHandler) => {
@@ -226,39 +189,92 @@ export default function streamie<
       handleOnError(queueError);
     }
     state.count.handling--;
-
-    requestProcessOutput();
-    requestProcessInput();
   }
 
   function processOutput() {
-    if (state.isPaused || state.isHalted || state.isDrained) return;
-    if (queue.output.success.length === 0) return;
-    // TODO should allow different strategies, but for now we will say that if any consumer
-    // is backpressured, no other outputStreamies will be pushed to, as this could allow a queue
-    // to grow indefinitely.
-    if (Array.from(outputStreamies).some((consumer) => consumer.state.backpressure.input)) return;
-
     const success = queue.output.success.shift();
     outputStreamies.forEach((consumer) => {
       consumer.push(success!.output);
     });
-
-    requestProcessOutput();
-    requestProcessInput();
   }
 
+  function checkCanProcessInput(): { canProcess: boolean, scheduleRetryIn?: number } {
+    if (
+      (state.isPaused || state.isHalted || state.isDrained) ||
+      (state.count.handling >= settings.concurrency) ||
+      (queue.input.length === 0) ||
+      (state.backpressure.output)
+    ) return { canProcess: false };
 
-  async function requestProcessInput() {
-    // Allow this to be more complicated logic in future.
-    await processInput();
 
-    if (state.isDrained) handleOnDrained();
+    const timeSinceLastHandled = state.lastHandledAt && Date.now() - state.lastHandledAt;
+
+    // This top level condition establishes a normal condition under which we would not handle
+    // the items, as there aren't enough to justify a batch. However, we will handle them
+    // given the exceptions below
+    if (queue.input.length < settings.batchSize) {
+      if (
+        // If the queue is meant to be drained, even if the input queue is not a full batch,
+        // we will still handle it.
+        (!state.shouldDrain) &&
+        // If we have waited too long since the last handled batch, we will handle the items
+        !(timeSinceLastHandled && (timeSinceLastHandled > settings.maxBatchWait))
+      ) {
+        
+        // At this point, we're already not going to handle the items the process, but if
+        // there is a maxBatchWait configured, we will ensure that there is a timeout in place
+        // to call processInput after the maxBatchWait time has elapsed. This is because the
+        // qualification for maxBatchWait time could elapse and be qualified for a process, but
+        // no attempt to process would necessarily be invoked at that time.
+        if (settings.maxBatchWait && (settings.maxBatchWait !== Infinity)) return { canProcess: false, scheduleRetryIn: settings.maxBatchWait - (timeSinceLastHandled || 0)};
+        return { canProcess: false };
+      }
+    }
+
+    return { canProcess: true };
   }
 
-  async function requestProcessOutput() {
-    // Allow this to be more complicated logic in future.
-    await processOutput();
+  function checkCanProcessOutput(): { canProcess: boolean; } {
+    if (
+      (state.isPaused || state.isHalted || state.isDrained) ||
+      (queue.output.success.length === 0) ||
+      // TODO should allow different strategies, but for now we will say that if any consumer
+      // is backpressured, no other outputStreamies will be pushed to, as this could allow a queue
+      // to grow indefinitely.
+      (Array.from(outputStreamies).some((consumer) => consumer.state.backpressure.input))
+    ) return { canProcess: false };
+    return { canProcess: true };
+  }
+
+  async function requestProcess() {
+    let activity = true;
+    while (activity) {
+      activity = false;
+      const { canProcess: canProcessInput, scheduleRetryIn } = checkCanProcessInput();
+      if (scheduleRetryIn) setTimeout(requestProcess, scheduleRetryIn);
+
+      if (canProcessInput) {
+        activity = true;
+
+        // We don't await this because we want to allow for parallel processing of input items.
+        processInput()
+        // We call this in a .then here rather than in the processInput function in
+        // order to avoid issues with stack overflows. If we call this in the processInput
+        // function, it will be called recursively, and if the input queue is large enough,
+        // it will cause a stack overflow.
+        .then(() => requestProcess());
+      }
+      if (checkCanProcessOutput().canProcess) {
+        activity = true;
+        
+        // Attempt to clear output. 
+        while (checkCanProcessOutput().canProcess) {
+          // We don't await this because we want to allow for parallel processing of output items and
+          // resume processing input items as soon as possible.
+          processOutput();
+        }
+      }
+    }
 
     if (state.isDrained) handleOnDrained();
   }
@@ -305,7 +321,7 @@ export default function streamie<
     if (state.shouldDrain) throw new Error(`Cannot push to a ${ state.isDrained ? 'drained' : 'draining'} streamie.`);
 
     queue.input.push(...items);
-    requestProcessInput();
+    requestProcess();
   }
 
 
@@ -343,7 +359,7 @@ export default function streamie<
 
   function pause(shouldPause?: boolean) {
     state.isPaused = shouldPause ?? !state.isPaused;
-    if (!state.isPaused) requestProcessInput();
+    if (!state.isPaused) requestProcess();
   }
 
   function drain() {
@@ -353,7 +369,7 @@ export default function streamie<
     // Move to next tick to allow for a final push to output queue. Items can still be pushed
     // to the output queue while draining, but if the streamie is considered drained immediately
     // upon draining, then the onDrained event will be fired before the final push to the output.
-    setTimeout(() => requestProcessInput());
+    setTimeout(() => requestProcess());
   }
 
   // This registers an input streamie, so that this streamie can be triggered to drain
@@ -388,7 +404,7 @@ export default function streamie<
     if (outputStreamie.state.isHalted) throw new Error('Cannot register a halted streamie as an output.');
     if (outputStreamies.has(outputStreamie)) return;
     outputStreamies.add(outputStreamie);
-    outputStreamie.onBackpressureRelease(() => requestProcessOutput());
+    outputStreamie.onBackpressureRelease(() => requestProcess());
     outputStreamie.onHalted(() => outputStreamies.delete(outputStreamie));
 
     // This would be a strange scenario, but it's not disallowed. If a streamie
