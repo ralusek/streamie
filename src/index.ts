@@ -90,7 +90,8 @@ export default function streamie<
       },
       // When the output queue is too long, this streamie should stop handling items.
       get output() {
-        return (queue.output.success.length + state.count.handling) >= settings.backpressureAt.output;
+        // return (queue.output.success.length + state.count.handling) >= settings.backpressureAt.output;
+        return queue.output.success.length >= settings.backpressureAt.output;
       },
     },
     get isDrained() {
