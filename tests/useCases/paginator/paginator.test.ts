@@ -16,7 +16,7 @@ function fetchArticles(page: number): Promise<{ data: { id: number; title: strin
           },
         },
       });
-    }, 1000);
+    }, 250);
   });
 }
 
@@ -34,7 +34,7 @@ describe('Streamie', () => {
         }
         // Push articles to output
         return response.data;
-      }, { seed: 1, flatten: true })
+      }, { seed: 1 as number, flatten: true })
       .map((article) => {
         results.push(article);
       }, {});

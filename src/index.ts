@@ -500,7 +500,10 @@ export default function streamie<
     }),
   } satisfies Streamie<IQT, OQT, C>;
 
-  if (config.seed !== undefined) setTimeout(() => self.push(config.seed!), 0);
+  if (config.seed !== undefined) setTimeout(() => {
+    if (state.isDrained) return;
+    self.push(config.seed!)
+  }, 0);
 
   return self;
 }

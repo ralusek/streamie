@@ -1,36 +1,71 @@
 import { StreamieQueueError } from './error';
 
+// export type BatchedIfConfigured<T, C extends Config> =
+//     'batchSize' extends keyof C
+//     ? (C['batchSize'] extends (1 | undefined)
+//         ? T
+//         : T[])
+//     : T;
+
 export type BatchedIfConfigured<T, C extends Config> =
-    'batchSize' extends keyof C
-    ? (C['batchSize'] extends (1 | undefined)
+  C extends { batchSize: infer BS }
+    ? (BS extends 1 | undefined
         ? T
         : T[])
     : T;
 
+// export type UnflattenedIfConfigured<T, C extends Config> =
+//     'flatten' extends keyof C
+//     ? (C['flatten'] extends true
+//         ? T[]
+//         : T)
+//     : T;
+
 export type UnflattenedIfConfigured<T, C extends Config> =
-    'flatten' extends keyof C
-    ? (C['flatten'] extends true
+  C extends { flatten: infer F }
+    ? (F extends true
         ? T[]
         : T)
     : T;
 
+// export type OutputIsInputIfFilter<IQT, OQT, C extends Config> =
+//     'isFilter' extends keyof C
+//     ? (C['isFilter'] extends true
+//         ? IQT
+//         : OQT)
+//     : OQT;
+
 export type OutputIsInputIfFilter<IQT, OQT, C extends Config> =
-    'isFilter' extends keyof C
-    ? (C['isFilter'] extends true
+  C extends { isFilter: infer F }
+    ? (F extends true
         ? IQT
         : OQT)
     : OQT;
 
+// export type BooleanIfFilter<OQT, C extends Config> =
+//     'isFilter' extends keyof C
+//     ? (C['isFilter'] extends true
+//         ? boolean
+//         : OQT)
+//     : OQT;
+
 export type BooleanIfFilter<OQT, C extends Config> =
-    'isFilter' extends keyof C
-    ? (C['isFilter'] extends true
+  C extends { isFilter: infer F }
+    ? (F extends true
         ? boolean
         : OQT)
     : OQT;
 
+// export type IfFilteredElse<A, B, C extends Config> =
+//     'isFilter' extends keyof C
+//     ? (C['isFilter'] extends true
+//         ? A
+//         : B)
+//     : B;
+
 export type IfFilteredElse<A, B, C extends Config> =
-    'isFilter' extends keyof C
-    ? (C['isFilter'] extends true
+  C extends { isFilter: infer F }
+    ? (F extends true
         ? A
         : B)
     : B;
