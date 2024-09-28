@@ -19,7 +19,7 @@ export default function streamie<
   handler: Handler<IQT, OQT, C>,
   config: C & {
     // When calling streamie directly, we allow a seed value to be passed
-    seed?: IQT;
+    seed?: NoInfer<IQT>;
   },
 ) {
   const queue: {
@@ -73,6 +73,7 @@ export default function streamie<
     shouldDrain: boolean;
     isHalted: boolean;
     hasHandledOnDrained: boolean;
+    lastError: StreamieQueueError<IQT, C> | null;
   } = {
     count: {
       started: 0,
@@ -101,6 +102,17 @@ export default function streamie<
     isPaused: false,
     isHalted: false,
     hasHandledOnDrained: false,
+    lastError: null,
+  };
+
+  const ref: {
+    // We hold off on creating a promise unless one is actually requested, because
+    // most streamies in a pipeline will not actually be awaited, most likely just the last one.
+    // If we create promises for all of them, even those that aren't being used, then they will all
+    // have unhandled promise rejections in the event of an error.
+    promise: Promise<null> | null;
+  } = {
+    promise: null,
   };
 
   const outputStreamies: Set<Streamie<OQT, any, any>> = new Set();
@@ -281,6 +293,7 @@ export default function streamie<
   }
 
   function handleOnError(queueError: StreamieQueueError<IQT, C>) {
+    state.lastError = queueError;
     // If this stream is configured to haltOnError, then its own promise
     // will have registered on onError listener to reject the promise, which
     // will be invoked here.
@@ -493,11 +506,22 @@ export default function streamie<
 
     _pushQueueError,
 
-    promise: new Promise((resolve, reject) => {
-      onDrained(() => resolve(null));
+    // The reason this is a getter is because most streamies in a pipeline will not
+    // actually be awaited, most likely just the last one. If we create promises
+    // for all of them, even those that aren't being used, then they will all have
+    // unhandled promise rejections in the event of an error.
+    get promise() {
+      if (ref.promise) return ref.promise;
+      
+      return ref.promise = new Promise<null>((resolve, reject) => {
+        if (state.hasHandledOnDrained) return resolve(null);
+        if (state.isHalted && state.lastError) return reject(state.lastError);
 
-      if (settings.haltOnError) onError((error) => reject(error));
-    }),
+        onDrained(() => resolve(null));
+  
+        if (settings.haltOnError) onError((error) => reject(error));
+      });
+    },
   } satisfies Streamie<IQT, OQT, C>;
 
   if (config.seed !== undefined) setTimeout(() => {

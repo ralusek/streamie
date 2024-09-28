@@ -20,11 +20,10 @@ describe('Streamie', () => {
   describe('typescript types', () => {
 
     test('basic types', async () => {
-      const a = streamie((value, { push, index }) => {
+      const a = streamie((value: number, { push, index }) => {
         const x = expectsNumber(value);
         return x;
-        // TODO would be nice to not have to cast this
-      }, { seed: 1 as number });
+      }, { seed: 1 });
 
       a.drain();
 

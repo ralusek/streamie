@@ -34,7 +34,7 @@ describe('Streamie', () => {
         }
         // Push articles to output
         return response.data;
-      }, { seed: 1 as number, flatten: true })
+      }, { seed: 1, flatten: true })
       .map((article) => {
         results.push(article);
       }, {});
