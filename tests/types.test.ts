@@ -1,5 +1,5 @@
-import streamie from '../src';
-import { BatchedIfConfigured } from '../src/types';
+import streamie from '../dist';
+import { BatchedIfConfigured } from '../dist/types';
 
 function expectsNumber(value: number) {
   return value;
