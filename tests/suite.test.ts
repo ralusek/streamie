@@ -4,6 +4,8 @@ function expectsNumber(value: number) {
   return value;
 }
 
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 describe('Streamie', () => {
   describe('TypeScript Types and Configurations', () => {
     // Test streamie with batchSize > 1 without flatten
@@ -142,45 +144,6 @@ describe('Streamie', () => {
     });
 
     // Test error handling with haltOnError true
-    // test('error handling with haltOnError true', async () => {
-    //   const a = streamie(async (value: number, { push, index }) => {
-    //     if (value === 3) {
-    //       throw new Error('Test error');
-    //     }
-    //     return value * 2;
-    //   }, { haltOnError: true, concurrency: 1 });
-
-    //   const result: number[] = [];
-
-    //   a.map((value) => result.push(value), {});
-
-    //   a.push(1, 2, 3, 4, 5);
-    //   a.drain();
-
-    //   let onErrored = false;
-    //   a.onError((err) => {
-    //     onErrored = true;
-    //     console.log('ONNN EEEEE', err);
-    //   });
-
-    //   let errored = false;
-    //   try {
-    //     await a.promise;
-    //   }
-    //   catch (err) {
-    //     errored = true;
-    //     console.log('CAUGHT EEEEE', err);
-    //   }
-
-    //   // expect(errored).toBe(true);
-
-    //   // await expect(a.promise).rejects.toThrow('Encountered an error while processing input: Test error');
-    //   // expect(result).toEqual([2, 4]); // Processing stopped after error at value 3
-
-    //   console.log('GOT ALL THE WAY HERE');
-    //   return new Promise((resolve) => { resolve(null); });
-    // });
-
     test('error handling with haltOnError true', async () => {
       const a = streamie(async (value: number, { push, index }) => {
         if (value === 3) {
@@ -188,45 +151,65 @@ describe('Streamie', () => {
         }
         return value * 2;
       }, { haltOnError: true, concurrency: 1 });
-      
+
       const result: number[] = [];
 
       const b = a.map((value) => result.push(value), {});
-      // b.promise.catch((err) => { console.log('CAUGHT MAPPED ERROR', err); });
 
-      a.push(1, 2, 3);
+      a.push(1, 2, 3, 4, 5);
       a.drain();
 
+      let onErrored = false;
+      a.onError((err) => {
+        onErrored = true;
+      });
+
+      let erroredA = false;
       try {
         await a.promise;
       }
       catch (err) {
-        console.log('CAUGHT ERROR', err);
+        erroredA = true;
       }
 
-      console.log('GOT ALL THE WAY HERE');
-      return new Promise((resolve) => { resolve(null); });
+      let erroredB = false;
+      try {
+        await b.promise;
+      }
+      catch (err) {
+        erroredB = true;
+      }
+
+      expect(onErrored).toBe(true);
+
+      await expect(a.promise).rejects.toThrow('Encountered an error while processing input: Test error');
+      await expect(b.promise).rejects.toThrow('Encountered an error while processing input: Test error');
+      
+      expect(erroredA).toBe(true);
+      expect(erroredB).toBe(true);
+
+      expect(result).toEqual([2, 4]); // Processing stopped after error at value 3
     });
 
-    // // Test error handling with haltOnError false
-    // test('error handling with haltOnError false', async () => {
-    //   const a = streamie(async (value: number, { push, index }) => {
-    //     if (value === 3) {
-    //       throw new Error('Test error');
-    //     }
-    //     push(value * 2);
-    //   }, { haltOnError: false });
+    // Test error handling with haltOnError false
+    test('error handling with haltOnError false', async () => {
+      const a = streamie(async (value: number, { push, index }) => {
+        if (value === 3) {
+          throw new Error('Test error');
+        }
+        return value * 2;
+      }, { haltOnError: false });
 
-    //   const result: number[] = [];
+      const result: number[] = [];
 
-    //   a.map((value) => result.push(value), {});
+      const b = a.map((value) => result.push(value), {});
 
-    //   a.push(1, 2, 3, 4, 5);
-    //   a.drain();
+      a.push(1, 2, 3, 4, 5);
+      a.drain();
 
-    //   await a.promise; // Should resolve despite the error
-    //   expect(result).toEqual([2, 4, 8, 10]); // Processing continues after error at value 3
-    // });
+      await b.promise; // Should resolve despite the error
+      expect(result).toEqual([2, 4, 8, 10]); // Processing continues after error at value 3
+    });
 
     // Test processing with concurrency > 1
     test('processing with concurrency > 1', async () => {
@@ -247,56 +230,46 @@ describe('Streamie', () => {
       await b.promise;
 
       expect(result.sort()).toEqual([2, 4, 6, 8]);
-      // Note: processingOrder may not be sequential due to concurrency
     });
 
 
     // Test error propagation with propagateErrors true
-    // test('error propagation with propagateErrors true', async () => {
-    //   const a = streamie(async (value: number, { push, index }) => {
-    //     if (value === 3) {
-    //       throw new Error('Test error');
-    //     }
-    //     return(value * 2);
-    //   }, { haltOnError: false, propagateErrors: true });
+    test('error propagation with propagateErrors true', async () => {
+      const a = streamie(async (value: number, { push, index }) => {
+        if (value === 3) {
+          throw new Error('Test error');
+        }
+        return(value * 2);
+      }, { haltOnError: true, propagateErrors: true });
 
-    //   const result: number[] = [];
-    //   const b = a.map((value) => result.push(value), {});
+      const result: number[] = [];
+      const b = a.map((value) => result.push(value), {});
 
-    //   a.push(1, 2, 3, 4, 5);
-    //   a.drain();
+      a.push(1, 2, 3, 4, 5);
+      a.drain();
 
-    //   await expect(b.promise).rejects.toThrow('Test error');
-    //   expect(result).toEqual([2, 4]); // Processing in b stopped after error
-    // });
+      await expect(b.promise).rejects.toThrow('Encountered an error while processing input: Test error');
+      expect(result).toEqual([2, 4]); // Processing in b stopped after error
+    });
 
-    // // Test error propagation with propagateErrors false
-    // test('error propagation with propagateErrors false', async () => {
-    //   const a = streamie(async (value: number, { push, index }) => {
-    //     if (value === 3) {
-    //       throw new Error('Test error');
-    //     }
-    //     push(value * 2);
-    //   }, { haltOnError: false, propagateErrors: false });
+    // Test error propagation with propagateErrors false
+    test('error propagation with propagateErrors false', async () => {
+      const a = streamie(async (value: number, { push, index }) => {
+        if (value === 3) {
+          throw new Error('Test error');
+        }
+        return (value * 2);
+      }, { haltOnError: false, propagateErrors: false });
 
-    //   const result: number[] = [];
-    //   const b = a.map((value) => result.push(value), {});
+      const result: number[] = [];
+      const b = a.map((value) => result.push(value), { haltOnError: true });
 
-    //   a.push(1, 2, 3, 4, 5);
-    //   a.drain();
+      a.push(1, 2, 3, 4, 5);
+      a.drain();
 
-    //   await b.promise; // Should resolve despite the error in a
-    //   expect(result).toEqual([2, 4, 8, 10]); // Processing continues in b
-    // });
-
-    // // Test type error when handler input type does not match batched input
-    // test('type error when handler input type does not match batched input', () => {
-    //   // Should cause a type error because handler expects number but input is number[]
-    //   // @ts-expect-error
-    //   const a = streamie((values: number, { push, index }) => {
-    //     push(values * 2); // Error: values is number[], cannot multiply
-    //   }, { batchSize: 5 });
-    // });
+      await b.promise; // Should resolve despite the error in a
+      expect(result).toEqual([2, 4, 8, 10]); // Processing continues in b
+    });
 
 
     // Test handler not allowing its seed value to dictate inferred type. Config is
@@ -376,61 +349,40 @@ describe('Streamie', () => {
       expect(result).toEqual([2, 4]);
     });
 
-    // // Test that halt stops processing
-    // test('halt stops processing', async () => {
-    //   const a = streamie(async (value: number, { push, index }) => {
-    //     if (value === 2) {
-    //       throw new Error('Test error');
-    //     }
-    //     push(value * 2);
-    //   }, { haltOnError: true });
+    // Test that halt stops processing
+    test('halt stops processing', async () => {
+      const a = streamie(async (value: number, { push, index }) => {
+        if (value === 2) {
+          throw new Error('Test error');
+        }
+        return (value * 2);
+      }, { haltOnError: true });
 
-    //   const result: number[] = [];
-    //   a.map((value) => result.push(value), {});
+      const result: number[] = [];
+      a.map((value) => result.push(value), {});
 
-    //   a.push(1, 2, 3);
-    //   a.drain();
+      a.push(1, 2, 3);
+      a.drain();
 
-    //   await expect(a.promise).rejects.toThrow('Test error');
-    //   expect(result).toEqual([2]); // Processing stopped after error at value 2
-    // });
+      await expect(a.promise).rejects.toThrow('Test error');
+      expect(result).toEqual([2]); // Processing stopped after error at value 2
+    });
 
-    // // Test that propagateErrors works across multiple streamies
-    // test('propagateErrors across multiple streamies', async () => {
-    //   const a = streamie(async (value: number, { push, index }) => {
-    //     if (value === 2) {
-    //       throw new Error('Test error');
-    //     }
-    //     push(value * 2);
-    //   }, { haltOnError: false, propagateErrors: true });
+    // Test map function with different concurrency settings
+    test('map function with different concurrency settings', async () => {
+      const a = streamie(async (value: number, { push, index }) => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return value * 2;
+      }, { concurrency: 2 });
 
-    //   const b = a.map((value) => value + 1, {});
+      const result: number[] = [];
+      a.map((value) => result.push(value), {});
 
-    //   const result: number[] = [];
-    //   b.map((value) => result.push(value), {});
+      a.push(1, 2, 3, 4);
+      a.drain();
+      await a.promise;
 
-    //   a.push(1, 2, 3);
-    //   a.drain();
-
-    //   await expect(b.promise).rejects.toThrow('Test error');
-    //   expect(result).toEqual([3]); // Only the first value processed before error
-    // });
-
-    // // Test map function with different concurrency settings
-    // test('map function with different concurrency settings', async () => {
-    //   const a = streamie(async (value: number, { push, index }) => {
-    //     await new Promise((resolve) => setTimeout(resolve, 50));
-    //     push(value * 2);
-    //   }, { concurrency: 2 });
-
-    //   const result: number[] = [];
-    //   a.map((value) => result.push(value), {});
-
-    //   a.push(1, 2, 3, 4);
-    //   a.drain();
-    //   await a.promise;
-
-    //   expect(result.sort()).toEqual([2, 4, 6, 8]);
-    // });
+      expect(result.sort()).toEqual([2, 4, 6, 8]);
+    });
   });
 });

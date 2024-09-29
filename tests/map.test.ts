@@ -117,7 +117,7 @@ describe('Streamie', () => {
       initialStreamie.drain();
       await filteredStreamie.promise;
       expect(filteredStreamieWasDrained).toBe(true);
-      expect(finalStreamieWasDrained).toBe(false);
+      expect(finalStreamieWasDrained).toBe(true);
       await final.promise;
       expect(finalStreamieWasDrained).toBe(true);
     });

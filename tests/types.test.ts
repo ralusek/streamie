@@ -79,5 +79,14 @@ describe('Streamie', () => {
       await filteredStreamie.promise;
       expect(filteredStreamieWasDrained).toBe(true);
     });
+
+    // Test type error when handler input type does not match batched input
+    test('type error when handler input type does not match batched input', () => {
+      // Should cause a type error because handler expects number but input is number[]
+      // @ts-expect-error
+      const a = streamie((values: number, { push, index }) => {
+        push(values * 2); // Error: values is number[], cannot multiply
+      }, { batchSize: 5 });
+    });
   });
 });
