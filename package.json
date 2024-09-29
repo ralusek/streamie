@@ -1,6 +1,6 @@
 {
   "name": "streamie",
-  "version": "1.1.5",
+  "version": "1.2.0",
   "description": "Library for processing data using common array behaviors.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
