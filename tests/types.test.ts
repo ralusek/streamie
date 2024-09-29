@@ -1,5 +1,5 @@
-import streamie from '../dist';
-import { BatchedIfConfigured } from '../dist/types';
+import streamie from '../src';
+import { BatchedIfConfigured } from '../src/types';
 
 function expectsNumber(value: number) {
   return value;
@@ -67,7 +67,7 @@ describe('Streamie', () => {
       const initialStreamie = streamie(async (input: number) => input * 3, {});
 
       const result: number[] = [];
-      const filteredStreamie = initialStreamie.filter((output) => output % 2 === 0, {})
+      const filteredStreamie = initialStreamie.filter(async (output) => output % 2 === 0, {})
       .map((value) => result.push(value), {});
       filteredStreamie.onDrained(() => {
         filteredStreamieWasDrained = true;
@@ -88,5 +88,28 @@ describe('Streamie', () => {
         push(values * 2); // Error: values is number[], cannot multiply
       }, { batchSize: 5 });
     });
+
+    test('type error when casting map input to wrong type (while including tools object (push, drain), which previously resulted in inference failures', () => {
+      type Comment = { id: string; body: string; };
+      let fetched = 0;
+      function fetchCommentsBatch({ username, after}: { username: string, after: string | null }) {
+        return Promise.resolve({ data: { after: fetched++ > 1 ? null : 'afterKey', children: [{ data: { id: 'id', body: 'body' } }] }});
+      }
+
+      const stream = streamie(async (after: string | null, { push, drain }) => {
+        const { data } = await fetchCommentsBatch({ username: 'hi', after });
+        if (data.after) push(data.after);
+        else drain();
+    
+        const comments = data.children.map(({ data }: { data: Comment }) => data);
+        return comments;
+      }, { seed: null, flatten: true })
+      .map(async (comment, { index }) => {
+        // @ts-expect-error
+        const shouldFail: number = comment;
+        const shouldWork: Comment = comment; // Ensure it's inferred as Comment
+        
+      }, { });
+    })
   });
 });

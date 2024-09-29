@@ -277,7 +277,7 @@ describe('Streamie', () => {
     // seed should be NoInfer, though, and should therefore not be used to infer the type.
     test('streamie with seed and type inference', async () => {
       const a = streamie((value: number, { push, index }) => {
-        
+        return value * 2;
       }, { seed: 0 });
 
       const result: number[] = [];

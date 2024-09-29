@@ -1,25 +1,11 @@
 import { StreamieQueueError } from './error';
 
-// export type BatchedIfConfigured<T, C extends Config> =
-//     'batchSize' extends keyof C
-//     ? (C['batchSize'] extends (1 | undefined)
-//         ? T
-//         : T[])
-//     : T;
-
 export type BatchedIfConfigured<T, C extends Config> =
   C extends { batchSize: infer BS }
     ? (BS extends 1 | undefined
         ? T
         : T[])
     : T;
-
-// export type UnflattenedIfConfigured<T, C extends Config> =
-//     'flatten' extends keyof C
-//     ? (C['flatten'] extends true
-//         ? T[]
-//         : T)
-//     : T;
 
 export type UnflattenedIfConfigured<T, C extends Config> =
   C extends { flatten: infer F }
@@ -28,26 +14,12 @@ export type UnflattenedIfConfigured<T, C extends Config> =
         : T)
     : T;
 
-// export type OutputIsInputIfFilter<IQT, OQT, C extends Config> =
-//     'isFilter' extends keyof C
-//     ? (C['isFilter'] extends true
-//         ? IQT
-//         : OQT)
-//     : OQT;
-
 export type OutputIsInputIfFilter<IQT, OQT, C extends Config> =
   C extends { isFilter: infer F }
     ? (F extends true
         ? IQT
         : OQT)
     : OQT;
-
-// export type BooleanIfFilter<OQT, C extends Config> =
-//     'isFilter' extends keyof C
-//     ? (C['isFilter'] extends true
-//         ? boolean
-//         : OQT)
-//     : OQT;
 
 export type BooleanIfFilter<OQT, C extends Config> =
   C extends { isFilter: infer F }
@@ -56,13 +28,6 @@ export type BooleanIfFilter<OQT, C extends Config> =
         : OQT)
     : OQT;
 
-// export type IfFilteredElse<A, B, C extends Config> =
-//     'isFilter' extends keyof C
-//     ? (C['isFilter'] extends true
-//         ? A
-//         : B)
-//     : B;
-
 export type IfFilteredElse<A, B, C extends Config> =
   C extends { isFilter: infer F }
     ? (F extends true
@@ -70,15 +35,22 @@ export type IfFilteredElse<A, B, C extends Config> =
         : B)
     : B;
 
-export type Handler<IQT, OQT, C extends Config> = (input: BatchedIfConfigured<IQT, C>, tools: Tools<IQT, OQT, C>) => BooleanIfFilter<UnflattenedIfConfigured<OQT, C>, C> | Promise<BooleanIfFilter<UnflattenedIfConfigured<OQT, C>, C>>;
+// Not the Tools<IQT, OQT, C> where tools just included references to the streamie itself are prefereable,
+// but caused inference to stop working. 
+// Whenever the tools argument was included at all in the arguments, inference basically stopped working.
+// export type Handler<IQT, OQT, C extends Config> = (input: BatchedIfConfigured<IQT, C>, tools: Tools<IQT, OQT, C>) => BooleanIfFilter<UnflattenedIfConfigured<OQT, C>, C> | Promise<BooleanIfFilter<UnflattenedIfConfigured<OQT, C>, C>>;
+// type Tools<IQT, OQT, C extends Config> = {
+//   self: Streamie<IQT, OQT, C>;
+//   push: Streamie<IQT, OQT, C>['push'];
+//   index: number;
+// };
 
-
-type Tools<IQT, OQT, C extends Config> = {
-  self: Streamie<IQT, OQT, C>;
-  push: Streamie<IQT, OQT, C>['push'];
+export type Handler<IQT, OQT, C extends Config> = (input: BatchedIfConfigured<IQT, C>, tools: Tools<IQT>) => BooleanIfFilter<UnflattenedIfConfigured<OQT, C>, C> | Promise<BooleanIfFilter<UnflattenedIfConfigured<OQT, C>, C>>;
+type Tools<IQT> = {
+  push: (item: IQT) => void;
+  drain: () => void;
   index: number;
 };
-
 
 export type Config = {
   // The number of items that can be queued before backpressure is applied. Backpressure will

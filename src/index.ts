@@ -177,7 +177,7 @@ export default function streamie<
     try {
       const handlerOutput: BooleanIfFilter<UnflattenedIfConfigured<OQT, C>, C> = await handler(
         handlerInput, {
-          self,
+          drain: self.drain,
           push: self.push,
           index,
         },
@@ -409,8 +409,9 @@ export default function streamie<
       // @ts-ignore
       handler,
       modifiedConfig,
-    ) as Streamie<OQT, BatchedIfConfigured<OQT, NC>, NC>;
-    return nextStreamie;
+    );
+
+    return nextStreamie as unknown as Streamie<OQT, BatchedIfConfigured<OQT, NC>, NC>;
   }
 
   // TODO add reduce, flatMap, etc.

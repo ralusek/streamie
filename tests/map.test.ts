@@ -33,13 +33,13 @@ describe('Streamie', () => {
         [6, 8],
       ];
       const result: number[] = [];
-      const mappedStreamie = initialStreamie.map((outputs: number[][]) => {
+      const mappedStreamie = initialStreamie.map((outputs) => {
         outputs.forEach((pair, index) => {
           const expectation = expectationsByBatch[index];
           expect(pair).toEqual(expectation);
         });
         result.push(...outputs.flat().map(output => output + 1));
-      }, { batchSize: 2});
+      }, { batchSize: 2 });
       mappedStreamie.onDrained(() => {
         mappedStreamieWasDrained = true;
         expect(result).toEqual([3, 5, 7, 9]);
@@ -62,8 +62,7 @@ describe('Streamie', () => {
       const result: number[] = [];
       let i = 0;
       const mappedStreamie = initialStreamie.map(
-        // @ts-ignore
-      (outputs: number[]) => {
+      (outputs) => {
         const expectation = expectationsByBatch[i++];
         expect(outputs).toEqual(expectation);
         result.push(...outputs.map(output => output + 1));

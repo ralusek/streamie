@@ -51,12 +51,12 @@ describe('Streamie', () => {
         mapB: [] as number[],
       };
 
-      const paginator = streamie(async (page: number, { self }) => {
+      const paginator = streamie(async (page: number, { push, drain }) => {
         const response = await fetchArticles(page);
         if (response.meta.pagination.totalPages !== page) {
-          self.push(page + 1); // Queue next page
+          push(page + 1); // Queue next page
         } else {
-          self.drain(); // Indicate that we're done
+          drain(); // Indicate that we're done
         }
         // Push articles to output
         return response.data;
