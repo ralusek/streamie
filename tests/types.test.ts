@@ -1,5 +1,5 @@
-import streamie from '../src';
-import { BatchedIfConfigured } from '../src/types';
+import streamie from '../dist';
+import { BatchedIfConfigured } from '../dist/types';
 
 function expectsNumber(value: number) {
   return value;
@@ -110,6 +110,22 @@ describe('Streamie', () => {
         const shouldWork: Comment = comment; // Ensure it's inferred as Comment
         
       }, { });
-    })
+    });
+
+    test('not letting seed value infer in such a manner that it takes precedence over handler argument type', () => {
+      type Comment = { id: string; body: string; };
+      async function fetchCommentsBatch(
+        { username, after }: { username: string; after?: string | null; }
+      ) {
+        return {} as { data: { after: string | null; children: { data: Comment }[] } };
+      }
+      const stream = streamie(async (after: string | null, { push }) => {
+        const { data } = await fetchCommentsBatch({ username: 'hi', after });
+        if (data.after) push(data.after);
+    
+        const comments = data.children.map(({ data }) => data);
+        return comments;
+      }, { seed: null, flatten: true })
+    });
   });
 });
