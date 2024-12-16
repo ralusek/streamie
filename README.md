@@ -33,12 +33,12 @@ Seriously, check out this interface.
 
 ## Pagination
 ```ts
-const paginator = streamie(async (page: number, { self }) => {
+const paginator = streamie(async (page: number, { push }) => {
   // Fetch data from an API or other source.
   const data = await fetchData(page);
   // If there's more data, push a new item into the streamie queue for handling.
   if (data.hasMore) {
-    self.push(page + 1);
+    push(page + 1);
   }
   // Return the data to be processed by downstream functions.
   return data.items;
@@ -52,12 +52,12 @@ Note, data sources like this which are producing their own inputs can be self-se
 like this:
 
 ```ts
-const paginator = streamie(async (page: number, { self }) => {
+const paginator = streamie(async (page: number, { push }) => {
   // Fetch data from an API or other source.
   const data = await fetchData(page);
   // If there's more data, push a new item into the streamie queue for handling.
   if (data.hasMore) {
-    self.push(page + 1);
+    push(page + 1);
   }
   // Return the data to be processed by downstream functions.
   return data.items;
@@ -73,10 +73,10 @@ We can begin by flattening the output of this streamie, so rather than streaming
 chunks of 50, they stream out as individual items.
 
 ```ts
-const paginator = streamie(async (page: number, { self }) => {
+const paginator = streamie(async (page: number, { push }) => {
   const data = await fetchData(page);
   if (data.hasMore) {
-    self.push(page + 1);
+    push(page + 1);
   }
   return data.items;
 }, { seed: 0, flatten: true });
@@ -128,11 +128,11 @@ Every streamie returns a promise that will be resolved upon being fully drained.
 drain itself, such as the case with our paginator:
 
 ```ts
-const paginator = streamie(async (page: number, { self }) => {
+const paginator = streamie(async (page: number, { push, drain }) => {
   const data = await fetchData(page);
   if (data.hasMore) {
-    self.push(page + 1);
-  } else self.drain();
+    push(page + 1);
+  } else drain();
   return data.items;
 }, { seed: 0, flatten: true });
 ```

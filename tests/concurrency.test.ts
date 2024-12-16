@@ -17,42 +17,42 @@ describe('Streamie', () => {
       // Push items into the streamie input queue.
       for (let i = 1; i <= 5; i++) {
         // The timeouts for the first 3 are staggered because they should be executing concurrently.
-        // Everything after that will actually be queued up, so they can all have 150ms and be naturally staggered.
-        concurrencyStreamie.push(Math.min(i * 50, 150));
+        // Everything after that will actually be queued up, so they can all have 300ms and be naturally staggered.
+        concurrencyStreamie.push(Math.min(i * 100, 300));
       }
 
-      // 25 MS in
-      // At 25 ms, the first 3 should be underway but the 4th should not have started.
-      await new Promise(resolve => setTimeout(resolve, 25));
+      // 50 MS in
+      // At 50 ms, the first 3 should be underway but the 4th should not have started.
+      await new Promise(resolve => setTimeout(resolve, 50));
       expect(active.length).toBe(3);
       expect(active).toEqual([1, 2, 3]);
 
-      // 75 MS in (25ms + 50ms)
-      // At 75ms the first task, taking 50ms, should have completed, and the 4th should have started.
-      await new Promise(resolve => setTimeout(resolve, 50));
+      // 150 MS in (50ms + 100ms)
+      // At 150ms the first task, taking 100ms, should have completed, and the 4th should have started.
+      await new Promise(resolve => setTimeout(resolve, 100));
       expect(active.length).toBe(3);
       expect(active).toEqual([2, 3, 4]);
 
-      // 125 MS in (75ms + 50ms)
-      // At 125ms the second task, taking 100ms, should have completed, and the 5th should have started.
-      await new Promise(resolve => setTimeout(resolve, 50));
+      // 250 MS in (150ms + 100ms)
+      // At 250ms the second task, taking 200ms, should have completed, and the 5th should have started.
+      await new Promise(resolve => setTimeout(resolve, 100));
       expect(active.length).toBe(3);
       expect(active).toEqual([3, 4, 5]);
 
-      // 175 MS in (125ms + 50ms)
-      // At 175ms the third task, taking 150ms, should have completed, and we'll be down to only 2 executing.
-      await new Promise(resolve => setTimeout(resolve, 50));
+      // 350 MS in (250ms + 100ms)
+      // At 350ms the third task, taking 300ms, should have completed, and we'll be down to only 2 executing.
+      await new Promise(resolve => setTimeout(resolve, 100));
       expect(active.length).toBe(2);
       expect(active).toEqual([4, 5]);
 
-      // 225 MS in (175ms + 50ms)
-      // At 225ms the fourth task, taking 200ms, should have completed, and we'll be down to only 1 executing.
-      await new Promise(resolve => setTimeout(resolve, 50));
+      // 450 MS in (350ms + 100ms)
+      // At 450ms the fourth task, taking 400ms, should have completed, and we'll be down to only 1 executing.
+      await new Promise(resolve => setTimeout(resolve, 100));
       expect(active.length).toBe(1);
       expect(active).toEqual([5]);
 
-      // 275 MS in (225ms + 50ms)
-      // At 275ms the fifth task, taking 250ms, should have completed, and we'll be down to 0 executing.
+      // 550 MS in (450ms + 100ms)
+      // At 550ms the fifth task, taking 500ms, should have completed, and we'll be down to 0 executing.
       await new Promise(resolve => setTimeout(resolve, 50));
       expect(active.length).toBe(0);
       expect(active).toEqual([]);

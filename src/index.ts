@@ -5,6 +5,8 @@ import { Streamie, Handler, Config, BatchedIfConfigured, UnflattenedIfConfigured
 // Validation
 import * as validate from './validation';
 
+type TimeoutId = ReturnType<typeof setTimeout>;
+
 export default function streamie<
   IQT extends any,
   OQT extends IfFilteredElse<
@@ -19,7 +21,7 @@ export default function streamie<
   handler: Handler<IQT, OQT, C>,
   config: C & {
     // When calling streamie directly, we allow a seed value to be passed
-    seed?: IQT;
+    seed?: NoInfer<IQT>;
   },
 ) {
   const queue: {
@@ -73,6 +75,7 @@ export default function streamie<
     shouldDrain: boolean;
     isHalted: boolean;
     hasHandledOnDrained: boolean;
+    lastError: StreamieQueueError<IQT, C> | null;
   } = {
     count: {
       started: 0,
@@ -101,6 +104,7 @@ export default function streamie<
     isPaused: false,
     isHalted: false,
     hasHandledOnDrained: false,
+    lastError: null,
   };
 
   const outputStreamies: Set<Streamie<OQT, any, any>> = new Set();
@@ -120,7 +124,38 @@ export default function streamie<
     onHalted: new Set(),
   };
 
-  let maxBatchWaitTimeout: NodeJS.Timeout | null = null;
+  const ref: {
+    // The reason we employ internal/external promise is because we want a lazily created external
+    // promise (for reasons explained on the externalPromise). The problem with a lazily created
+    // promise is that we don't know when it will be created, so it could have been before or after
+    // the promise is resolved/errored, meaning there would need to be divergent logic to handle
+    // both cases. By creating an internal promise that is always created, we can always handle
+    // the promise resolution/rejection the same way, and then the lazily created external promise
+    // is merely a wrapper around the internal promise.
+    // Note that below we catch the internal promise so that it doesn't throw an unhandled rejection,
+    // whereas the external promise is wrapped in such a manner that it will still throw an unhandled
+    // rejection if it is, in fact, not handled.
+    internalPromise: Promise<null>;
+    // We hold off on creating a promise unless one is actually requested, because
+    // most streamies in a pipeline will not actually be awaited, most likely just the last one.
+    // If we create promises for all of them, even those that aren't being used, then they will all
+    // have unhandled promise rejections in the event of an error.
+    externalPromise: Promise<null> | null;
+
+    timeouts: Set<TimeoutId>;
+  } = {
+    internalPromise: new Promise<null>((resolve, reject) => {
+      onDrained(() => resolve(null));
+      if (settings.haltOnError) onError((error) => reject(error));
+    }),
+    externalPromise: null,
+    timeouts: new Set(),
+  };
+
+  // We catch the internal promise so that it doesn't throw an unhandled rejection in the event of an error.
+  // It being caught here will not prevent it from propagating errors to the external promise, which is what
+  // we would want (if an external promise is created).
+  ref.internalPromise.catch(() => {});
 
   // Internal functions
   async function processInput() {
@@ -142,7 +177,7 @@ export default function streamie<
     try {
       const handlerOutput: BooleanIfFilter<UnflattenedIfConfigured<OQT, C>, C> = await handler(
         handlerInput, {
-          self,
+          drain: self.drain,
           push: self.push,
           index,
         },
@@ -252,7 +287,13 @@ export default function streamie<
     while (activity) {
       activity = false;
       const { canProcess: canProcessInput, scheduleRetryIn } = checkCanProcessInput();
-      if (scheduleRetryIn) setTimeout(requestProcess, scheduleRetryIn);
+      if (scheduleRetryIn) {
+        const timeoutId = setTimeout(() => {
+          requestProcess();
+          ref.timeouts.delete(timeoutId);
+        }, scheduleRetryIn);
+        ref.timeouts.add(timeoutId);
+      }
 
       if (canProcessInput) {
         activity = true;
@@ -281,6 +322,7 @@ export default function streamie<
   }
 
   function handleOnError(queueError: StreamieQueueError<IQT, C>) {
+    state.lastError = queueError;
     // If this stream is configured to haltOnError, then its own promise
     // will have registered on onError listener to reject the promise, which
     // will be invoked here.
@@ -301,6 +343,10 @@ export default function streamie<
 
   function handleOnDrained() {
     if (!state.isDrained || state.hasHandledOnDrained) return;
+    
+    ref.timeouts.forEach((timeoutId) => clearTimeout(timeoutId));
+    ref.timeouts.clear();
+
     state.hasHandledOnDrained = true;
     eventHandlers.onDrained.forEach((eventHandler) => {
       eventHandler();
@@ -337,7 +383,12 @@ export default function streamie<
     handler: Handler<OQT, NOQT, NC>,
     config: NC,
   ): Streamie<OQT, NOQT, NC> {
-    const nextStreamie = streamie(handler, config) as Streamie<OQT, NOQT, NC>;
+    const modifiedConfig = {
+      ...config,
+      haltOnError: config.haltOnError ?? settings.haltOnError,
+    };
+
+    const nextStreamie = streamie(handler, modifiedConfig) as Streamie<OQT, NOQT, NC>;
 
     registerOutput(nextStreamie);
 
@@ -348,12 +399,19 @@ export default function streamie<
     handler: Handler<OQT, boolean, NC>,
     config: NC,
   ): Streamie<OQT, BatchedIfConfigured<OQT, NC>, NC> {
+    const modifiedConfig = {
+      ...config,
+      haltOnError: config.haltOnError ?? settings.haltOnError,
+      isFilter: true,
+    };
+
     const nextStreamie = map(
       // @ts-ignore
       handler,
-      { ...config, isFilter: true },
-    ) as Streamie<OQT, BatchedIfConfigured<OQT, NC>, NC>;
-    return nextStreamie;
+      modifiedConfig,
+    );
+
+    return nextStreamie as unknown as Streamie<OQT, BatchedIfConfigured<OQT, NC>, NC>;
   }
 
   // TODO add reduce, flatMap, etc.
@@ -493,14 +551,26 @@ export default function streamie<
 
     _pushQueueError,
 
-    promise: new Promise((resolve, reject) => {
-      onDrained(() => resolve(null));
-
-      if (settings.haltOnError) onError((error) => reject(error));
-    }),
+    // The reason this is a getter is because most streamies in a pipeline will not
+    // actually be awaited, most likely just the last one. If we create promises
+    // for all of them, even those that aren't being used, then they will all have
+    // unhandled promise rejections in the event of an error.
+    get promise() {
+      if (ref.externalPromise) return ref.externalPromise;
+      
+      // We create a new promise wrapping the internal promise so that, while we've
+      // auto "handled" the internal promise catch, this new promise will still issue
+      // an unhandled rejection error if the external promise is actually unhandled.
+      return ref.externalPromise = new Promise<null>((resolve, reject) => {
+        ref.internalPromise.then(() => resolve(null)).catch(reject);
+      });
+    },
   } satisfies Streamie<IQT, OQT, C>;
 
-  if (config.seed !== undefined) setTimeout(() => self.push(config.seed!), 0);
+  if (config.seed !== undefined) setTimeout(() => {
+    if (state.isDrained) return;
+    self.push(config.seed!)
+  }, 0);
 
   return self;
 }

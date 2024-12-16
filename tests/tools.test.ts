@@ -10,18 +10,20 @@ async function getData(index: number) {
 describe('Streamie', () => {
   describe('tools', () => {
     // Test the map function
-    test('self and push', async () => {
+    test('drain and push', async () => {
       const result: string[] = [];
       const initialStreamie = streamie<number, string | void, {}>(async (
         page: number,
         {
-          self,
+          // self,
+          drain,
           push,
           index,
         },
       ) => {
         const data = await getData(page);
-        if (!data) return self.drain();
+        // if (!data) return self.drain();
+        if (!data) return drain();
         push(index + 1); // This goes to the input queue
         return data; // This goes to the output queue
       }, { seed: 0 });
