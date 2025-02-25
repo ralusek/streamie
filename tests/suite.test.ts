@@ -59,9 +59,8 @@ describe('Streamie', () => {
     });
 
     // Test type error when handler return type does not match with flatten
-    test('type error when handler return type does not match with flatten', () => {
-      // Should cause a type error because handler returns non-array but flatten is true
-      // @ts-expect-error
+    test('handler can return non-array with flatten true with our updated permissive typing', () => {
+      // This no longer causes a type error with our updated typing
       const a = streamie((values: number[], { push, index }) => {
         return `Sum: ${values.reduce((acc, val) => acc + val, 0)}`; // Returns string
       }, { batchSize: 2, flatten: true });

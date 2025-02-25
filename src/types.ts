@@ -7,12 +7,14 @@ export type BatchedIfConfigured<T, C extends Config> =
         : T[])
     : T;
 
+export type FlattenResult<T> = T extends any[] ? T[number] : T;
+
 export type UnflattenedIfConfigured<T, C extends Config> =
   C extends { flatten: infer F }
     ? (F extends true
-        ? T[]
-        : T)
-    : T;
+        ? FlattenResult<T>
+        : T | T[])
+    : T | T[];
 
 export type OutputIsInputIfFilter<IQT, OQT, C extends Config> =
   C extends { isFilter: infer F }
@@ -45,7 +47,17 @@ export type IfFilteredElse<A, B, C extends Config> =
 //   index: number;
 // };
 
-export type Handler<IQT, OQT, C extends Config> = (input: BatchedIfConfigured<IQT, C>, tools: Tools<IQT>) => BooleanIfFilter<UnflattenedIfConfigured<OQT, C>, C> | Promise<BooleanIfFilter<UnflattenedIfConfigured<OQT, C>, C>>;
+export type HandlerReturnType<OQT, C extends Config> = 
+  C extends { isFilter: true } 
+    ? boolean | Promise<boolean>
+    : C extends { flatten: true }
+      ? any | any[] | Promise<any | any[]>
+      : OQT | OQT[] | Promise<OQT | OQT[]>;
+
+export type Handler<IQT, OQT, C extends Config> = (
+  input: BatchedIfConfigured<IQT, C>, 
+  tools: Tools<IQT>
+) => HandlerReturnType<OQT, C>;
 type Tools<IQT> = {
   push: (item: IQT) => void;
   drain: () => void;

@@ -175,7 +175,7 @@ export default function streamie<
     const index = state.count.started++;
 
     try {
-      const handlerOutput: BooleanIfFilter<UnflattenedIfConfigured<OQT, C>, C> = await handler(
+      const handlerOutput = await handler(
         handlerInput, {
           drain: self.drain,
           push: self.push,
