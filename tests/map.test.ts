@@ -23,7 +23,7 @@ describe('Streamie', () => {
     // Test the map function with batchSize > 1
     test('map function with batchSize > 1', async () => {
       let mappedStreamieWasDrained = false;
-      const initialStreamie = streamie<number, number[], { batchSize: 2}>(
+      const initialStreamie = streamie(
         (inputs: number[]) => inputs.map(input => input * 2),
         { batchSize: 2 }
       );
@@ -89,7 +89,7 @@ describe('Streamie', () => {
       const filteredStreamie = initialStreamie.filter((output) => {
         return output % 2 === 0;
       }, {})
-      .map((output) => {
+      .filter((output) => {
         return output[1] > 4;
       }, { isFilter: true, batchSize: 2 })
       .map((output) => {

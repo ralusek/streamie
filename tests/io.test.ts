@@ -40,7 +40,7 @@ describe('Multiple Inputs and Outputs', () => {
   test('Handles multiple outputs correctly', async () => {
     const streamB = streamie(async (input: number) => input * 2, {});
     const streamC1 = streamie(async (input: number) => input * 2, {});
-    const streamC2 = streamie<number, number, {}>(async (input: number) => delay(200).then(() => input * 3), {});
+    const streamC2 = streamie(async (input: number) => delay(200).then(() => input * 3), {});
     streamB.registerOutput(streamC1);
     streamB.registerOutput(streamC2);
 

@@ -1,12 +1,88 @@
 import { StreamieQueueError } from './error';
 
-export type BatchedIfConfigured<T, C extends Config> =
-  C extends { batchSize: infer BS }
-    ? (BS extends 1 | undefined
-        ? T
-        : T[])
-    : T;
+export type MaybePromise<T> = T | Promise<T>;
 
+export type Config = {
+  backpressureAt?: number | {
+    input?: number;
+    output?: number;
+  };
+  concurrency?: number;
+  batchSize?: number;
+  maxBatchWait?: number;
+  haltOnError?: boolean;
+  flatten?: boolean;
+  propagateErrors?: boolean;
+};
+
+export type InternalConfig = Config & {
+  /** @internal .filter() owns public filter typing. */
+  isFilter?: boolean;
+};
+
+export type BatchSize<C> =
+  C extends { batchSize: infer BS }
+    ? BS
+    : undefined;
+
+export type IsBatched<C> =
+  BatchSize<C> extends 1 | undefined
+    ? false
+    : true;
+
+export type HandlerInput<I, C extends Config> =
+  IsBatched<C> extends true
+    ? I[]
+    : I;
+
+export type BatchedIfConfigured<T, C extends Config> = HandlerInput<T, C>;
+
+export type ElementOf<T> =
+  Awaited<T> extends readonly (infer E)[]
+    ? E
+    : never;
+
+export type NormalStreamOutput<R, C extends Config> =
+  C extends { flatten: true }
+    ? ElementOf<Awaited<R>>
+    : Awaited<R>;
+
+export type FilterStreamOutput<I, C extends Config> =
+  C extends { flatten: true }
+    ? ElementOf<HandlerInput<I, C>>
+    : HandlerInput<I, C>;
+
+export type FlattenableFilterConfig<I, C extends Config> =
+  C extends { flatten: true }
+    ? HandlerInput<I, C> extends readonly unknown[]
+      ? unknown
+      : never
+    : unknown;
+
+export type Tools<I> = {
+  push: (item: I) => void;
+  drain: () => void;
+  index: number;
+};
+
+export type Handler<I, R, C extends Config> = (
+  input: HandlerInput<I, C>,
+  tools: Tools<I>,
+) => MaybePromise<R>;
+
+export type FilterHandler<I, C extends Config> = (
+  input: HandlerInput<I, C>,
+  tools: Tools<I>,
+) => MaybePromise<boolean>;
+
+export type NormalHandlerReturnConstraint<C extends Config> =
+  C extends { flatten: true }
+    ? readonly unknown[]
+    : unknown;
+
+// Backwards-compatible utility aliases. The new public API should prefer
+// HandlerInput, NormalStreamOutput, and FilterStreamOutput because those names
+// separate the three shapes that the old aliases mixed together.
 export type UnflattenedIfConfigured<T, C extends Config> =
   C extends { flatten: infer F }
     ? (F extends true
@@ -14,128 +90,59 @@ export type UnflattenedIfConfigured<T, C extends Config> =
         : T)
     : T;
 
-export type OutputIsInputIfFilter<IQT, OQT, C extends Config> =
+export type OutputIsInputIfFilter<IQT, OQT, C extends InternalConfig> =
   C extends { isFilter: infer F }
     ? (F extends true
         ? IQT
         : OQT)
     : OQT;
 
-export type BooleanIfFilter<OQT, C extends Config> =
+export type BooleanIfFilter<OQT, C extends InternalConfig> =
   C extends { isFilter: infer F }
     ? (F extends true
         ? boolean
         : OQT)
     : OQT;
 
-export type IfFilteredElse<A, B, C extends Config> =
+export type IfFilteredElse<A, B, C extends InternalConfig> =
   C extends { isFilter: infer F }
     ? (F extends true
         ? A
         : B)
     : B;
 
-// Not the Tools<IQT, OQT, C> where tools just included references to the streamie itself are prefereable,
-// but caused inference to stop working. 
-// Whenever the tools argument was included at all in the arguments, inference basically stopped working.
-// export type Handler<IQT, OQT, C extends Config> = (input: BatchedIfConfigured<IQT, C>, tools: Tools<IQT, OQT, C>) => BooleanIfFilter<UnflattenedIfConfigured<OQT, C>, C> | Promise<BooleanIfFilter<UnflattenedIfConfigured<OQT, C>, C>>;
-// type Tools<IQT, OQT, C extends Config> = {
-//   self: Streamie<IQT, OQT, C>;
-//   push: Streamie<IQT, OQT, C>['push'];
-//   index: number;
-// };
+export type Streamie<I, O, C extends Config> = {
+  push: (...items: I[]) => void;
 
-export type Handler<IQT, OQT, C extends Config> = (input: BatchedIfConfigured<IQT, C>, tools: Tools<IQT>) => BooleanIfFilter<UnflattenedIfConfigured<OQT, C>, C> | Promise<BooleanIfFilter<UnflattenedIfConfigured<OQT, C>, C>>;
-type Tools<IQT> = {
-  push: (item: IQT) => void;
-  drain: () => void;
-  index: number;
-};
-
-export type Config = {
-  // The number of items that can be queued before backpressure is applied. Backpressure will
-  // alert upstream streamies that they should stop pushing items into the queue until the
-  // downstream streamie has processed some items.
-  // If passing a number, it will be applied to both input and output queues, for a total of
-  // 2 * backpressureAt items allowed in the queue.
-  // Input backpressure is how many items can be pushed into the input queue before backpressure
-  // is applied.
-  // Output backpressure is how many items can be pushed into the output queue before backpressure
-  // is applied.
-  // Output backpressure will be used to determine if this streamie should pause handling items,
-  // whereas input backpressure will be used to determine if upstream streamies should pause.
-  backpressureAt?: number | {
-    input?: number;
-    output?: number;
-  };
-  // The number of items which can be processed concurrently.
-  concurrency?: number;
-  // The number of items that should wait to be processed in a single handler call. Fewer items will
-  // be passed into the handler in the event that the streamie has been told to clear, or in the event
-  // that the maxBatchWait time has elapsed.
-  batchSize?: number;
-  // The maximum amount of time that should be waited before processing a batch of items. Should the
-  // amount of time since the last handler call exceed this value, the handler will be called with
-  // fewer than batchSize items.
-  maxBatchWait?: number;
-  // Means that truthiness of output determines whether or not the respective input goes into the output queue.
-  isFilter?: boolean;
-  // Whether streamie should stop and throw an error on the promise upon encountering an error in a handler.
-  haltOnError?: boolean;
-  // Should flatten the output.
-  flatten?: boolean;
-  // Whether errors should be passed downstream.
-  propagateErrors?: boolean;
-};
-
-export type Streamie<IQT extends any, OQT extends any, C extends Config> = {
-  push: (item: IQT) => void;
-
-  // Forks for new streamies
   map: <
-    NOQT extends IfFilteredElse<
-      BatchedIfConfigured<OQT, NC>,
-      any,
-      NC
-    >,
-    NC extends Config,
+    const NC extends Config,
+    R extends NormalHandlerReturnConstraint<NC>,
   >(
-    handler: Handler<
-      OQT,
-      NOQT,
-      NC
-    >,
+    handler: Handler<O, R, NC>,
     config: NC,
-  ) => Streamie<OQT, NOQT, NC>;
-  filter: <NC extends Omit<Config, 'isFilter'>>(
-    handler: Handler<OQT, boolean, NC>,
-    config: NC,
-  ) => Streamie<OQT, BatchedIfConfigured<OQT, NC>, NC>;
+  ) => Streamie<O, NormalStreamOutput<R, NC>, NC>;
 
-  // Control flow
+  filter: <
+    const NC extends Config,
+  >(
+    handler: FilterHandler<O, NC>,
+    config: NC & FlattenableFilterConfig<O, NC>,
+  ) => Streamie<O, FilterStreamOutput<O, NC>, NC>;
+
   pause: (shouldPause?: boolean) => void;
   drain: () => void;
 
-  // Register input streamies
-  // We woudl be included to say that the 'OQT' of an input streamie should be
-  // the 'IQT' of this streamie, but we would need to know whether or not the
-  // input streamie had been flattened.
-  registerInput: (inputStreamie: Streamie<any, IQT, any>) => void;
-  registerOutput: (outputStreamie: Streamie<OQT, any, any>) => void;
+  registerInput: (inputStreamie: Streamie<any, I, any>) => void;
+  registerOutput: (outputStreamie: Streamie<O, any, any>) => void;
 
-  // Event handler registration
   onBackpressureRelease: (eventHandler: () => void) => void;
   onDrained: (eventHandler: () => void) => void;
   onDraining: (eventHandler: () => void) => void;
-  onError: (eventHandler: (error: StreamieQueueError<IQT, C>) => void) => void;
+  onError: (eventHandler: (error: StreamieQueueError<I, C>) => void) => void;
   onHalted: (eventHandler: () => void) => void;
 
-  // This is to allow upstream streamies to propagate errors. Should not be invoked for
-  // another reason. We can't know the type generics because it could have been passed
-  // from a parent of a parent, etc.
   _pushQueueError: (error: StreamieQueueError<any, any>) => void;
 
-  // Public state
   state: {
     backpressure: {
       input: boolean;
@@ -154,6 +161,5 @@ export type Streamie<IQT extends any, OQT extends any, C extends Config> = {
     };
   };
 
-  // Promise which resolves when the streamie is drained.
   promise: Promise<null>;
 };

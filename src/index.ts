@@ -1,6 +1,19 @@
 // Types
 import { StreamieQueueError } from './error';
-import { Streamie, Handler, Config, BatchedIfConfigured, UnflattenedIfConfigured, BooleanIfFilter, OutputIsInputIfFilter, IfFilteredElse } from './types';
+import {
+  Streamie,
+  Handler,
+  FilterHandler,
+  Config,
+  InternalConfig,
+  HandlerInput,
+  NormalStreamOutput,
+  FilterStreamOutput,
+  FlattenableFilterConfig,
+  NormalHandlerReturnConstraint,
+  MaybePromise,
+  Tools,
+} from './types';
 
 // Validation
 import * as validate from './validation';
@@ -8,37 +21,53 @@ import * as validate from './validation';
 type TimeoutId = ReturnType<typeof setTimeout>;
 
 export default function streamie<
-  IQT extends any,
-  OQT extends IfFilteredElse<
-    // If the streamie is a filter, the output queue type is the input to the handler.
-    // We need to account for the possibility that the input to the handler is batched.
-    BatchedIfConfigured<IQT, C>,
-    any,
-    C
-  >,
-  const C extends Config,
+  const C extends Config & { batchSize?: 1 | undefined },
+  I,
+  R extends NormalHandlerReturnConstraint<C>,
 >(
-  handler: Handler<IQT, OQT, C>,
+  handler: (input: I, tools: Tools<I>) => MaybePromise<R>,
+  config: C & { seed?: NoInfer<I> },
+): Streamie<I, NormalStreamOutput<R, C>, C>;
+
+export default function streamie<
+  const C extends Config & { batchSize: number },
+  I,
+  R extends NormalHandlerReturnConstraint<C>,
+>(
+  handler: (input: I[], tools: Tools<I>) => MaybePromise<R>,
+  config: C & { seed?: NoInfer<I> },
+): Streamie<I, NormalStreamOutput<R, C>, C>;
+
+export default function streamie<
+  const C extends Config,
+  I,
+  R extends NormalHandlerReturnConstraint<C>,
+>(
+  handler: Handler<I, R, C>,
+  config: C & { seed?: NoInfer<I> },
+): Streamie<I, NormalStreamOutput<R, C>, C>;
+
+export default function streamie<
+  const C extends Config,
+  I,
+  R extends NormalHandlerReturnConstraint<C>,
+>(
+  handler: Handler<I, R, C>,
   config: C & {
-    // When calling streamie directly, we allow a seed value to be passed
-    seed?: NoInfer<IQT>;
+    // When calling streamie directly, we allow a seed value to be passed.
+    // NoInfer keeps seed from overpowering the handler parameter type.
+    seed?: NoInfer<I>;
   },
-) {
+): Streamie<I, NormalStreamOutput<R, C>, C> {
+  type HandlerInputShape = HandlerInput<I, C>;
+  type OutputItem = NormalStreamOutput<R, C>;
   const queue: {
-    input: IQT[];
+    input: I[];
     output: {
-      // A queue pairing the input items with their handler output.
+      // A queue pairing the input items with their final stream output item.
       success: {
-        // We always pair the input of the handler with the queue output,
-        // regardless of whether the output has been flattened or not.
-        // The input of the handler may or may not have been batched.
-        input: BatchedIfConfigured<IQT, C>;
-        // Output is always the OQT, but not always the direct return value
-        // of the handler. If the streamie is flattened, the handler output
-        // is an array, and will be OQT[]. If the streamie is filtered, the
-        // return value of the handler is a boolean, and OQT will be equal to
-        // IQT, or IQT[] if the streamie is batched.
-        output: OQT;
+        input: HandlerInputShape;
+        output: OutputItem;
       }[];
     };
   } = {
@@ -54,7 +83,7 @@ export default function streamie<
     concurrency: config.concurrency || 1,
     batchSize: config.batchSize || 1,
     maxBatchWait: config.maxBatchWait || Infinity,
-    isFilter: config.isFilter === true,
+    isFilter: (config as InternalConfig).isFilter === true,
     haltOnError: config.haltOnError !== false,
     flatten: config.flatten === true,
     propagateErrors: config.propagateErrors !== false,
@@ -75,7 +104,7 @@ export default function streamie<
     shouldDrain: boolean;
     isHalted: boolean;
     hasHandledOnDrained: boolean;
-    lastError: StreamieQueueError<IQT, C> | null;
+    lastError: StreamieQueueError<I, C> | null;
   } = {
     count: {
       started: 0,
@@ -107,14 +136,14 @@ export default function streamie<
     lastError: null,
   };
 
-  const outputStreamies: Set<Streamie<OQT, any, any>> = new Set();
-  const inputStreamies: Set<Streamie<any, IQT, any>> = new Set();
+  const outputStreamies: Set<Streamie<OutputItem, any, any>> = new Set();
+  const inputStreamies: Set<Streamie<any, I, any>> = new Set();
 
   const eventHandlers: {
     onBackpressureRelease: Set<() => void>;
     onDrained: Set<() => void>;
     onDraining: Set<() => void>;
-    onError: Set<(error: StreamieQueueError<IQT, C>) => void>;
+    onError: Set<(error: StreamieQueueError<I, C>) => void>;
     onHalted: Set<() => void>;
   } = {
     onBackpressureRelease: new Set(),
@@ -164,7 +193,7 @@ export default function streamie<
     state.lastHandledAt = Date.now();
     state.count.handling++;
     const itemsToHandle = queue.input.splice(0, settings.batchSize);
-    const handlerInput = (settings.batchSize === 1 ? itemsToHandle[0] : itemsToHandle) as BatchedIfConfigured<IQT, C>;
+    const handlerInput = (settings.batchSize === 1 ? itemsToHandle[0] : itemsToHandle) as HandlerInputShape;
 
     if (startedWithBackpressure && !state.backpressure.input) {
       eventHandlers.onBackpressureRelease.forEach((eventHandler) => {
@@ -175,7 +204,7 @@ export default function streamie<
     const index = state.count.started++;
 
     try {
-      const handlerOutput: BooleanIfFilter<UnflattenedIfConfigured<OQT, C>, C> = await handler(
+      const handlerOutput: R = await handler(
         handlerInput, {
           drain: self.drain,
           push: self.push,
@@ -191,7 +220,7 @@ export default function streamie<
         if (settings.isFilter) {
           if (!handlerOutput) return; // Handler returned false, so we do not push anything to the output queue.
           const filterOutput = handlerInput; // Handler returned true, so we push the input to the output queue.
-          const successQueue = queue.output.success as { input: BatchedIfConfigured<IQT, C>, output: BatchedIfConfigured<IQT, C> }[];
+          const successQueue = queue.output.success as { input: HandlerInputShape, output: HandlerInputShape }[];
           if (!settings.flatten) {
             return successQueue.push({ input: handlerInput, output: filterOutput });
           }
@@ -203,12 +232,12 @@ export default function streamie<
           return successQueue.push(...(filterOutput as any[]).map((input) => ({ input, output: input })));
         }
 
-        const successQueue = queue.output.success as { input: BatchedIfConfigured<IQT, C>, output: OQT }[];
+        const successQueue = queue.output.success as { input: HandlerInputShape, output: OutputItem }[];
         if (settings.flatten) {
           if (!Array.isArray(handlerOutput)) throw new Error('Cannot flatten output that is not an array.');
-          successQueue.push(...(handlerOutput as OQT[]).map((output) => ({ input: handlerInput, output })));
+          successQueue.push(...(handlerOutput as OutputItem[]).map((output) => ({ input: handlerInput, output })));
         }
-        else successQueue.push({ input: handlerInput, output: handlerOutput as OQT });
+        else successQueue.push({ input: handlerInput, output: handlerOutput as OutputItem });
       })();
     } catch (err) {
       const queueError = new StreamieQueueError(
@@ -321,7 +350,7 @@ export default function streamie<
     if (state.isDrained) handleOnDrained();
   }
 
-  function handleOnError(queueError: StreamieQueueError<IQT, C>) {
+  function handleOnError(queueError: StreamieQueueError<I, C>) {
     state.lastError = queueError;
     // If this stream is configured to haltOnError, then its own promise
     // will have registered on onError listener to reject the promise, which
@@ -363,7 +392,7 @@ export default function streamie<
 
 
   // Public functions
-  function push(...items: IQT[]) {
+  function push(...items: I[]) {
     if (state.isHalted) throw new Error('Cannot push to a halted streamie.');
     if (state.shouldDrain) throw new Error(`Cannot push to a ${ state.isDrained ? 'drained' : 'draining'} streamie.`);
 
@@ -373,45 +402,47 @@ export default function streamie<
 
 
   function map<
-    NOQT extends IfFilteredElse<
-      BatchedIfConfigured<OQT, NC>,
-      any,
-      NC
-    >,
-    NC extends Config
+    const NC extends Config,
+    NR extends NormalHandlerReturnConstraint<NC>,
   >(
-    handler: Handler<OQT, NOQT, NC>,
+    handler: Handler<OutputItem, NR, NC>,
     config: NC,
-  ): Streamie<OQT, NOQT, NC> {
+  ): Streamie<OutputItem, NormalStreamOutput<NR, NC>, NC> {
     const modifiedConfig = {
       ...config,
       haltOnError: config.haltOnError ?? settings.haltOnError,
     };
 
-    const nextStreamie = streamie(handler, modifiedConfig) as Streamie<OQT, NOQT, NC>;
+    const nextStreamie = streamie(
+      handler,
+      modifiedConfig as NC,
+    ) as Streamie<OutputItem, NormalStreamOutput<NR, NC>, NC>;
 
     registerOutput(nextStreamie);
 
     return nextStreamie;
   }
 
-  function filter<NC extends Omit<Config, 'isFilter'>>(
-    handler: Handler<OQT, boolean, NC>,
-    config: NC,
-  ): Streamie<OQT, BatchedIfConfigured<OQT, NC>, NC> {
+  function filter<
+    const NC extends Config,
+  >(
+    handler: FilterHandler<OutputItem, NC>,
+    config: NC & FlattenableFilterConfig<OutputItem, NC>,
+  ): Streamie<OutputItem, FilterStreamOutput<OutputItem, NC>, NC> {
     const modifiedConfig = {
       ...config,
       haltOnError: config.haltOnError ?? settings.haltOnError,
       isFilter: true,
-    };
+    } as NC & InternalConfig;
 
-    const nextStreamie = map(
-      // @ts-ignore
+    const nextStreamie = (streamie as any)(
       handler,
       modifiedConfig,
-    );
+    ) as Streamie<OutputItem, FilterStreamOutput<OutputItem, NC>, NC>;
 
-    return nextStreamie as unknown as Streamie<OQT, BatchedIfConfigured<OQT, NC>, NC>;
+    registerOutput(nextStreamie as unknown as Streamie<OutputItem, any, any>);
+
+    return nextStreamie;
   }
 
   // TODO add reduce, flatMap, etc.
@@ -433,7 +464,7 @@ export default function streamie<
 
   // This registers an input streamie, so that this streamie can be triggered to drain
   // in the event that all of its input streamies are drained.
-  function registerInput(inputStreamie: Streamie<any, IQT, any>) {
+  function registerInput(inputStreamie: Streamie<any, I, any>) {
     if (state.isDrained) throw new Error('Cannot register an input on a drained streamie.');
     if (inputStreamie.state.isDrained) throw new Error('Cannot register a drained streamie as an input.');
     if (state.isHalted) throw new Error('Cannot register an input on a halted streamie.');
@@ -456,7 +487,7 @@ export default function streamie<
     }
   }
 
-  function registerOutput(outputStreamie: Streamie<OQT, any, any>) {
+  function registerOutput(outputStreamie: Streamie<OutputItem, any, any>) {
     if (state.isDrained) throw new Error('Cannot register an output on a drained streamie.');
     if (outputStreamie.state.isDrained) throw new Error('Cannot register a drained streamie as an output.');
     if (state.isHalted) throw new Error('Cannot register an output on a halted streamie.');
@@ -487,7 +518,7 @@ export default function streamie<
     eventHandlers.onDraining.add(eventHandler);
   }
 
-  function onError(eventHandler: (error: StreamieQueueError<IQT, C>) => void) {
+  function onError(eventHandler: (error: StreamieQueueError<I, C>) => void) {
     eventHandlers.onError.add(eventHandler);
   }
 
@@ -565,7 +596,7 @@ export default function streamie<
         ref.internalPromise.then(() => resolve(null)).catch(reject);
       });
     },
-  } satisfies Streamie<IQT, OQT, C>;
+  } satisfies Streamie<I, OutputItem, C>;
 
   if (config.seed !== undefined) setTimeout(() => {
     if (state.isDrained) return;
