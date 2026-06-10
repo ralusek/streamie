@@ -101,7 +101,7 @@ describe('streamie memory usage', () => {
         const behaviors = newStreamie.map((x) => x * 3, {})
         .filter(() => true, {});
 
-        newStreamie.push(1, 2, 3);
+        [1, 2, 3].forEach((item) => newStreamie.push(item));
         newStreamie.drain();
 
         if ((i > 10_000) && ((i % CHECK_INTERVAL) === 0)) {

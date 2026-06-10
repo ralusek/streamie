@@ -31,7 +31,7 @@ describe('Streamie', () => {
       expect(streamB.state.backpressure.input || streamB.state.backpressure.output).toBe(false);
       expect(streamB.state.count.handling).toBe(0);
       const firstBatch = items.slice(0, 3); // 3 items
-      streamA.push(...firstBatch); // 3 items
+      firstBatch.forEach((item) => streamA.push(item)); // 3 items
 
       await delay(10);
       expect(streamA.state.count.queued.input).toBe(0);
@@ -44,7 +44,7 @@ describe('Streamie', () => {
       expect(streamB.state.backpressure.output).toBe(false);
 
       const secondBatch = items.slice(3, 6); // 3 items
-      streamA.push(...secondBatch); // 3 items
+      secondBatch.forEach((item) => streamA.push(item)); // 3 items
 
       await delay(10);
       expect(streamA.state.count.queued.input).toBe(1);

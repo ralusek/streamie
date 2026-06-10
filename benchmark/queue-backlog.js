@@ -55,7 +55,7 @@ async function runBacklog(n) {
     const end = Math.min(i + 1000, n);
     const items = new Array(end - i);
     for (let j = 0; i < end; i++, j++) items[j] = i;
-    head.push(...items);
+    for (const item of items) head.push(item);
   }
   head.drain();
   await tail.promise;
@@ -76,7 +76,7 @@ async function runSteady(n) {
         const end = Math.min(i + 50, n);
         const items = [];
         for (; i < end; i++) items.push(i);
-        head.push(...items);
+        for (const item of items) head.push(item);
       }
       if (i >= n) {
         head.drain();

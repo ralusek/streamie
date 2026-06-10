@@ -189,6 +189,8 @@ streamie((value: number) => value, { maxBatchWait: 100 });
 const source1 = streamie((value: number) => value, {});
 
 source1.push(1);
+
+// @ts-expect-error push accepts exactly one item
 source1.push(1, 2, 3, 4);
 
 source1.map((value, { push }) => {
@@ -197,8 +199,41 @@ source1.map((value, { push }) => {
   // @ts-expect-error handler helper push accepts exactly one input item
   push(1, 2);
 
+  // The tools push exposes the synchronous receipt metadata (but not the receipt's
+  // promise, whose type would be circular with the handler's own return type).
+  const toolsPushResult = push(value);
+  type ToolsPush_Backpressure = Expect<Equal<typeof toolsPushResult.backpressure, boolean>>;
+
   return value * 2;
 });
+
+// ---------------------------------------------------------------------------
+// Push receipts
+// ---------------------------------------------------------------------------
+
+const pushReceipt = source1.push(1);
+
+export type PushReceipt_Backpressure = Expect<
+  Equal<typeof pushReceipt.backpressure, boolean>
+>;
+
+// A receipt's promise resolves with the streamie's output type.
+export type PushReceipt_Output = Expect<
+  Equal<typeof pushReceipt.promise, Promise<number>>
+>;
+export type PushReceipt_Output_NotAny = Expect<NotAny<
+  Awaited<typeof pushReceipt.promise>
+>>;
+
+// A batch stage's receipt resolves with the batch the item joined.
+const batchReceipt = batched.push(1);
+
+export type BatchReceipt_Output = Expect<
+  Equal<typeof batchReceipt.promise, Promise<number[]>>
+>;
+
+// @ts-expect-error push accepts numbers here, not strings
+source1.push('1');
 
 // Prevent accidental widening to any in the core inference path.
 export type _NoUnexpectedAny = [

@@ -26,7 +26,7 @@ describe('Handles drains as expected', () => {
     streamA.registerOutput(streamB);
     streamB.registerOutput(streamC);
 
-    streamA.push(1, 2, 3, 4);
+    [1, 2, 3, 4].forEach((item) => streamA.push(item));
 
     streamA.drain();
     await streamA.promise;

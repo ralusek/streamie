@@ -37,7 +37,7 @@ function feed(head, n) {
         const end = Math.min(i + 50, n);
         const items = [];
         for (; i < end; i++) items.push(i);
-        head.push(...items);
+        for (const item of items) head.push(item);
       }
       if (i >= n) {
         head.drain();

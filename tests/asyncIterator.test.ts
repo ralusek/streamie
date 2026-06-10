@@ -6,7 +6,7 @@ describe('Async iteration', () => {
 
   test('Iterates all outputs of a streamie in order', async () => {
     const s = streamie(async (input: number) => input * 2, {});
-    s.push(1, 2, 3, 4, 5);
+    [1, 2, 3, 4, 5].forEach((item) => s.push(item));
     s.drain();
 
     const results: number[] = [];
@@ -20,7 +20,7 @@ describe('Async iteration', () => {
 
   test('Iterates outputs of a synchronous handler', async () => {
     const s = streamie((input: number) => input + 1, {});
-    s.push(1, 2, 3);
+    [1, 2, 3].forEach((item) => s.push(item));
     s.drain();
 
     const results: number[] = [];
@@ -37,7 +37,7 @@ describe('Async iteration', () => {
       .filter((item) => item % 4 === 0)
       .map(async (item) => item / 4);
 
-    s.push(1, 2, 3, 4, 5, 6, 7, 8);
+    [1, 2, 3, 4, 5, 6, 7, 8].forEach((item) => s.push(item));
     s.drain();
 
     const results: number[] = [];
@@ -50,7 +50,7 @@ describe('Async iteration', () => {
 
   test('A slow consumer exerts backpressure on the source', async () => {
     const s = streamie((input: number) => input, { backpressureAt: { output: 4 } });
-    s.push(...Array.from({ length: 30 }, (_, i) => i));
+    Array.from({ length: 30 }, (_, i) => i).forEach((item) => s.push(item));
     s.drain();
 
     const results: number[] = [];
@@ -70,7 +70,7 @@ describe('Async iteration', () => {
       if (input === 3) throw new Error('boom');
       return input;
     }, {});
-    s.push(1, 2, 3, 4);
+    [1, 2, 3, 4].forEach((item) => s.push(item));
     s.drain();
 
     const results: number[] = [];
@@ -97,7 +97,7 @@ describe('Async iteration', () => {
       handled++;
       return input;
     }, {});
-    s.push(1, 2, 3, 4, 5, 6);
+    [1, 2, 3, 4, 5, 6].forEach((item) => s.push(item));
     s.drain();
 
     const results: number[] = [];
@@ -116,9 +116,9 @@ describe('Async iteration', () => {
 
   test('Receives items pushed while iteration is in flight', async () => {
     const s = streamie(async (input: number) => input, {});
-    s.push(1, 2);
+    [1, 2].forEach((item) => s.push(item));
 
-    setTimeout(() => s.push(3, 4), 5);
+    setTimeout(() => { s.push(3); s.push(4); }, 5);
     setTimeout(() => {
       s.push(5);
       s.drain();
@@ -134,7 +134,7 @@ describe('Async iteration', () => {
 
   test('Iterating an already-drained streamie completes immediately', async () => {
     const s = streamie(async (input: number) => input, {});
-    s.push(1, 2);
+    [1, 2].forEach((item) => s.push(item));
     s.drain();
     await s.promise;
 
@@ -179,7 +179,7 @@ describe('Async iteration', () => {
     // Both iterators register before processing begins (same synchronous block as
     // the pushes), so outputs are broadcast to each.
     const promises = [iterate(), iterate()];
-    s.push(1, 2, 3);
+    [1, 2, 3].forEach((item) => s.push(item));
     s.drain();
 
     const [a, b] = await Promise.all(promises);

@@ -13,8 +13,8 @@ describe('Multiple Inputs and Outputs', () => {
     const result: number[] = [];
     const finalStreamie = streamB.map((output) => result.push(output), {});
     
-    streamA1.push(1, 2);
-    streamA2.push(3, 4);
+    [1, 2].forEach((item) => streamA1.push(item));
+    [3, 4].forEach((item) => streamA2.push(item));
     expect(streamA1.state.isDrained).toBe(false);
     expect(streamA2.state.isDrained).toBe(false);
     expect(streamB.state.isDrained).toBe(false);
@@ -49,7 +49,7 @@ describe('Multiple Inputs and Outputs', () => {
     const finalStreamie1 = streamC1.map((output) => result1.push(output), {});
     const finalStreamie2 = streamC2.map((output) => result2.push(output), {});
 
-    streamB.push(1, 2, 3, 4);
+    [1, 2, 3, 4].forEach((item) => streamB.push(item));
     expect(streamB.state.isDrained).toBe(false);
     expect(streamC1.state.isDrained).toBe(false);
     expect(streamC2.state.isDrained).toBe(false);

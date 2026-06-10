@@ -55,7 +55,7 @@ describe('Streamie', () => {
         expect(result).toEqual([6, 12]);
       });
 
-      initialStreamie.push(1, 2, 3, 4);
+      [1, 2, 3, 4].forEach((item) => initialStreamie.push(item));
       initialStreamie.drain();
       await filteredStreamie.promise;
       expect(filteredStreamieWasDrained).toBe(true);

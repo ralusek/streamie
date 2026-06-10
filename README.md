@@ -149,6 +149,43 @@ await paginator
 // Here, the process is complete.
 ```
 
+## Push Receipts
+
+`push` takes a single item, is synchronous, and returns a receipt. The receipt's
+`.promise` resolves with the item's output once its handler invocation has settled:
+
+```ts
+const doubled = streamie(async (input: number) => input * 2, {});
+
+const receipt = doubled.push(21);
+await receipt.promise; // 42
+```
+
+The receipt also carries the input backpressure state the push produced. Pushes are
+never refused, so this is a cooperative signal: a producer seeing `true` should pause
+and resume on the `onBackpressureRelease` event.
+
+```ts
+if (doubled.push(item).backpressure) {
+  await new Promise<void>((resolve) => doubled.onBackpressureRelease(resolve));
+}
+```
+
+A few behaviors worth knowing:
+  - Receipt promises are created lazily, on first access. A receipt you never look at
+    costs no promise allocation, and — importantly — cannot produce unhandled
+    rejection warnings when the pipeline errors.
+  - If an item's handler invocation throws, its receipt rejects with the same
+    `StreamieQueueError` the streamie's own promise rejects with. If the streamie
+    halts before a queued item is ever handled, that item's receipt rejects with the
+    halting error, so awaiters are never left hanging.
+  - The promise settles when the item has been *processed*, not when downstream
+    consumers have taken the output — so awaiting a receipt before consuming the
+    output cannot deadlock the pipeline.
+  - A filter stage's receipt resolves with the item itself once it has been
+    processed, whether or not it passed the predicate; a batch stage's receipts each
+    resolve with the batch their item joined.
+
 ## Async Iteration
 
 Every streamie is an async iterable, so its outputs can be consumed with `for await...of`:
@@ -156,7 +193,7 @@ Every streamie is an async iterable, so its outputs can be consumed with `for aw
 ```ts
 const doubled = streamie(async (input: number) => input * 2, {});
 
-doubled.push(1, 2, 3);
+[1, 2, 3].forEach((item) => doubled.push(item));
 doubled.drain();
 
 for await (const item of doubled) {

@@ -145,7 +145,7 @@ describe('Streamie', () => {
         return value;
        }, {});
 
-      a.push(1, 2, 3, 4, 5);
+      [1, 2, 3, 4, 5].forEach((item) => a.push(item));
       a.drain();
       await b.promise;
 
@@ -167,7 +167,7 @@ describe('Streamie', () => {
 
       const b = a.map((value) => result.push(value), {});
 
-      a.push(1, 2, 3, 4, 5);
+      [1, 2, 3, 4, 5].forEach((item) => a.push(item));
       a.drain();
 
       let onErrored = false;
@@ -215,7 +215,7 @@ describe('Streamie', () => {
 
       const b = a.map((value) => result.push(value), {});
 
-      a.push(1, 2, 3, 4, 5);
+      [1, 2, 3, 4, 5].forEach((item) => a.push(item));
       a.drain();
 
       await b.promise; // Should resolve despite the error
@@ -236,7 +236,7 @@ describe('Streamie', () => {
 
       const b = a.map((value) => result.push(value), {});
 
-      a.push(1, 2, 3, 4);
+      [1, 2, 3, 4].forEach((item) => a.push(item));
       a.drain();
       await b.promise;
 
@@ -256,7 +256,7 @@ describe('Streamie', () => {
       const result: number[] = [];
       const b = a.map((value) => result.push(value), {});
 
-      a.push(1, 2, 3, 4, 5);
+      [1, 2, 3, 4, 5].forEach((item) => a.push(item));
       a.drain();
 
       await expect(b.promise).rejects.toThrow('Encountered an error while processing input: Test error');
@@ -275,7 +275,7 @@ describe('Streamie', () => {
       const result: number[] = [];
       const b = a.map((value) => result.push(value), { haltOnError: true });
 
-      a.push(1, 2, 3, 4, 5);
+      [1, 2, 3, 4, 5].forEach((item) => a.push(item));
       a.drain();
 
       await b.promise; // Should resolve despite the error in a
@@ -328,7 +328,7 @@ describe('Streamie', () => {
       const result: number[] = [];
       a.map((value) => result.push(value), {});
 
-      a.push(1, 2, 3);
+      [1, 2, 3].forEach((item) => a.push(item));
       a.pause();
 
       // Wait to ensure processing does not continue
@@ -348,7 +348,7 @@ describe('Streamie', () => {
         return (value * 2);
       }, {});
 
-      a.push(1, 2);
+      [1, 2].forEach((item) => a.push(item));
       a.drain();
       // Should throw an error when trying to push after drain
       expect(() => a.push(3)).toThrow('Cannot push to a draining streamie.');
@@ -372,7 +372,7 @@ describe('Streamie', () => {
       const result: number[] = [];
       a.map((value) => result.push(value), {});
 
-      a.push(1, 2, 3);
+      [1, 2, 3].forEach((item) => a.push(item));
       a.drain();
 
       await expect(a.promise).rejects.toThrow('Test error');
@@ -389,7 +389,7 @@ describe('Streamie', () => {
       const result: number[] = [];
       a.map((value) => result.push(value), {});
 
-      a.push(1, 2, 3, 4);
+      [1, 2, 3, 4].forEach((item) => a.push(item));
       a.drain();
       await a.promise;
 

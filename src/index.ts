@@ -17,6 +17,7 @@ import * as validate from './validation';
 // Data structures
 import RingBuffer from './utils/dataStructures/ringBuffer';
 import createAsyncIterator from './utils/asyncIterator';
+import PushReceipt from './utils/pushReceipt';
 
 type TimeoutId = ReturnType<typeof setTimeout>;
 
@@ -36,6 +37,11 @@ export default function streamie<I, R>(
 
   const queue: {
     input: RingBuffer<I>;
+    // Receipts for externally pushed items, aligned slot-for-slot with the input
+    // queue (items delivered by upstream streamies occupy a slot holding undefined).
+    // null until the first public push, so streamie-to-streamie delivery — the hot
+    // path — pays nothing for receipt tracking unless a receipt can actually exist.
+    receipt: RingBuffer<PushReceipt<OutputItem> | undefined> | null;
     output: {
       // A queue pairing the input items with their final stream output item. The input
       // is a single item for unbatched streamies, or the handled batch for batched ones.
@@ -50,6 +56,7 @@ export default function streamie<I, R>(
     // queue gets deep (see the rationale in the RingBuffer header and the numbers
     // in benchmark/queue-backlog.js).
     input: new RingBuffer(),
+    receipt: null,
     output: {
       success: new RingBuffer(),
     },
@@ -197,6 +204,26 @@ export default function streamie<I, R>(
     else queue.output.success.push({ input: handlerInput, output: handlerOutput as OutputItem });
   }
 
+  // The receipts dequeued alongside one handler invocation's input: a single
+  // maybe-receipt for unbatched streamies, an array of maybe-receipts for batched
+  // ones (undefined entries are items that arrived via _receive), or null when
+  // receipt tracking was never activated.
+  type InvocationReceipts = PushReceipt<OutputItem> | undefined | (PushReceipt<OutputItem> | undefined)[] | null;
+
+  function resolveReceipts(receipts: InvocationReceipts, value: unknown) {
+    if (!receipts) return;
+    if (Array.isArray(receipts)) {
+      for (let i = 0; i < receipts.length; i++) receipts[i]?._resolve(value as OutputItem);
+    } else receipts._resolve(value as OutputItem);
+  }
+
+  function rejectReceipts(receipts: InvocationReceipts, error: unknown) {
+    if (!receipts) return;
+    if (Array.isArray(receipts)) {
+      for (let i = 0; i < receipts.length; i++) receipts[i]?._reject(error);
+    } else receipts._reject(error);
+  }
+
   // Handles one item/batch from the input queue. Returns undefined when the handler
   // settled synchronously, or a promise that resolves once an asynchronous handler has
   // settled and its output has been enqueued.
@@ -212,6 +239,14 @@ export default function streamie<I, R>(
     const handlerInput = (settings.batchSize === 1
       ? queue.input.shift()!
       : queue.input.shiftMany(settings.batchSize)) as I | I[];
+    // Receipts travel with their items, so the aligned slots are dequeued in the same
+    // breath — before anything (like the backpressure release handlers below) can
+    // re-enter processing and disturb the alignment.
+    const receipts: InvocationReceipts = queue.receipt === null
+      ? null
+      : (settings.batchSize === 1
+        ? queue.receipt.shift()
+        : queue.receipt.shiftMany(settings.batchSize));
 
     if (startedWithBackpressure && !state.backpressure.input) {
       eventHandlers.onBackpressureRelease.forEach((eventHandler) => {
@@ -232,6 +267,9 @@ export default function streamie<I, R>(
         },
       );
 
+      // This invocation's receipts reject with the same error the streamie's own
+      // promise will see.
+      rejectReceipts(receipts, queueError);
       handleOnError(queueError);
     };
 
@@ -260,6 +298,12 @@ export default function streamie<I, R>(
         (output) => {
           try {
             settleSuccess(handlerInput, output);
+            // A receipt resolves with what its invocation contributed downstream:
+            // the handler output, except for filter stages, where the handler output
+            // is the predicate's boolean and the value passed through is the input
+            // itself. (For a flatten stage this is the pre-flatten array — i.e. all
+            // of the outputs the item produced.)
+            resolveReceipts(receipts, settings.isFilter ? handlerInput : output);
           } catch (err) {
             handleError(err);
           }
@@ -276,6 +320,8 @@ export default function streamie<I, R>(
     // than paying for promise allocation and a microtask hop on every invocation.
     try {
       settleSuccess(handlerInput, handlerOutput);
+      // See the resolution-value note on the asynchronous path above.
+      resolveReceipts(receipts, settings.isFilter ? handlerInput : handlerOutput);
     } catch (err) {
       handleError(err);
     }
@@ -423,6 +469,18 @@ export default function streamie<I, R>(
   function setHalted() {
     if (state.isHalted) return;
     state.isHalted = true;
+    // A halt abandons whatever is still queued, so any receipts held for those items
+    // would otherwise never settle, deadlocking their awaiters. Reject them with the
+    // same error the streamie's promise rejects with. In-flight invocations are
+    // unaffected: their receipts were dequeued with their items and settle on their
+    // own. (This leaves the receipt queue empty while the input queue is not, but a
+    // halted streamie never dequeues input again, so the alignment is moot.)
+    if (queue.receipt !== null) {
+      const error = state.lastError ?? new Error('Streamie was halted.');
+      while (queue.receipt.length > 0) {
+        queue.receipt.shift()?._reject(error);
+      }
+    }
     eventHandlers.onHalted.forEach((eventHandler) => {
       eventHandler();
     });
@@ -430,12 +488,26 @@ export default function streamie<I, R>(
 
 
   // Public functions
-  function push(...items: I[]) {
+  function push(item: I): PushReceipt<OutputItem> {
     if (state.isHalted) throw new Error('Cannot push to a halted streamie.');
     if (state.shouldDrain) throw new Error(`Cannot push to a ${ state.isDrained ? 'drained' : 'draining'} streamie.`);
 
-    for (let i = 0; i < items.length; i++) queue.input.push(items[i]);
+    // Receipt tracking activates on the first push rather than up front, so that
+    // streamies fed only by upstream streamies never pay for it. Items already queued
+    // at activation (delivered via _receive) have no receipts, so their slots are
+    // backfilled with undefined to establish the slot-for-slot alignment with the
+    // input queue that processInput relies on.
+    if (queue.receipt === null) {
+      queue.receipt = new RingBuffer();
+      for (let i = queue.input.length; i > 0; i--) queue.receipt.push(undefined);
+    }
+
+    queue.input.push(item);
+    const receipt = new PushReceipt<OutputItem>(state.backpressure.input);
+    queue.receipt.push(receipt);
+
     scheduleProcess();
+    return receipt;
   }
 
   function withInheritedDefaults(config: Config): Config {
@@ -626,6 +698,12 @@ export default function streamie<I, R>(
     if (state.shouldDrain) throw new Error(`Cannot push to a ${ state.isDrained ? 'drained' : 'draining'} streamie.`);
 
     for (let i = 0; i < items.length; i++) queue.input.push(items[i]);
+    // Items delivered by upstream streamies have no receipts (nobody holds a handle
+    // to them), but once receipt tracking is active they still occupy slots to keep
+    // the two queues aligned.
+    if (queue.receipt !== null) {
+      for (let i = 0; i < items.length; i++) queue.receipt.push(undefined);
+    }
     requestProcess();
   }
 

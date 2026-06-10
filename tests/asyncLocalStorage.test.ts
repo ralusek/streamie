@@ -54,7 +54,7 @@ describe('Streamie', () => {
             return true;
           });
 
-        source.push(1, 2, 3, 4);
+        [1, 2, 3, 4].forEach((item) => source.push(item));
         source.drain();
         await tail.promise;
       });
@@ -78,7 +78,7 @@ describe('Streamie', () => {
           observed.push({ item: x, before, after: als.getStore()?.requestId });
         }, { concurrency: 3 });
 
-        s.push(1, 2, 3);
+        [1, 2, 3].forEach((item) => s.push(item));
         s.drain();
         await s.promise;
       });

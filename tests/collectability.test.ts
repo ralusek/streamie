@@ -34,7 +34,7 @@ describeIfGc('streamie collectability', () => {
       const batched = flattened.batch(2);
       const tail = batched.filter(() => true, {});
 
-      source.push({ n: 1 }, { n: 2 }, { n: 3 });
+      [{ n: 1 }, { n: 2 }, { n: 3 }].forEach((item) => source.push(item));
       source.drain();
       await tail.promise;
 
@@ -55,7 +55,7 @@ describeIfGc('streamie collectability', () => {
       const tail = source.batch(2).map(async (pair) => pair.length, {});
       stages.push(source, tail);
 
-      source.push(...items);
+      items.forEach((item) => source.push(item));
       source.drain();
       await tail.promise;
 
@@ -74,7 +74,7 @@ describeIfGc('streamie collectability', () => {
       }, {});
       const tail = source.map(async (x) => x * 2, {});
 
-      source.push(1, 2, 3);
+      [1, 2, 3].forEach((item) => source.push(item));
       await expect(source.promise).rejects.toThrow();
       await expect(tail.promise).rejects.toThrow();
 
