@@ -1,20 +1,8 @@
 import streamie from '../dist';
-import { BatchedIfConfigured } from '../dist/types';
 
 function expectsNumber(value: number) {
   return value;
 }
-
-// Explicit type tests
-type BatchedIfConfiguredTest1 = BatchedIfConfigured<number, { batchSize: 1 }>; // Expected: number
-type BatchedIfConfiguredTest1Test2 = BatchedIfConfigured<number, { batchSize: 5 }>; // Expected: number[]
-type BatchedIfConfiguredTest1Test3 = BatchedIfConfigured<number, {}>;               // Expected: number
-
-const aaa: BatchedIfConfiguredTest1 = 1;
-const bbb: BatchedIfConfiguredTest1Test2 = [1, 2, 3, 4, 5];
-const ccc: BatchedIfConfiguredTest1Test3 = 1;
-
-
 
 describe('Streamie', () => {
   describe('typescript types', () => {
@@ -30,38 +18,31 @@ describe('Streamie', () => {
       await a.promise;
     });
 
-    // Test the filter function
-    test('filter function', async () => {
-      // This works because output is not flattened, so doesn't need to be an array
-      const a = streamie((value: number[], { push, index }) => {
-        return 'Hello' + value[0] + value[1];
-      }, { batchSize: 2 });
+    test('batch and flatten combinators', async () => {
+      const a = streamie((value: number, { push, index }) => value, {});
+
+      // A batched stage receives the batch as an array
+      const b = a.batch(2).map((values, { push, index }) => {
+        return 'Hello' + values[0] + values[1];
+      }, {});
+
+      // Flattening a stage whose items are arrays emits the elements individually
+      const c = a.batch(2)
+      .map((values, { index }) => values.map((value) => 'Hello' + index + value), {})
+      .flatten()
+      .map((value) => {
+        const greeting: string = value; // Ensure elements are inferred as string
+        return greeting;
+      }, {});
+
+      // Flattening a stream of non-array items is a type error
+      const d = a.map((value) => `${value}`, {});
+      // @ts-expect-error flatten is only callable when stream items are arrays
+      d.flatten();
 
       a.drain();
 
-      // This one needs to be flattened
-      const b = streamie((value: number[], { push, index }) => {
-        return ['Hello' + index + value[0], 'Hello' + index + value[1]];
-      }, { batchSize: 2, flatten: true });
-
-      b.drain();
-
-      // Here we're returning a non-flattenable type, i.e. not an array, so it should be an error
-      // @ts-expect-error
-      const b1 = streamie((value: number[], { push, index }) => {
-        return 'Hello' + value[0] + value[1];
-      }, { batchSize: 2, flatten: true });
-
-      b1.drain();
-
-      // This one is fine because we're not flattening the output, so no error despite no array
-      const b2 = streamie((value: number[], { push, index }) => {
-        return 'Hello' + value[0] + value[1];
-      }, { batchSize: 2, flatten: false });
-
-      b2.drain();
-
-      await Promise.all([a.promise, b.promise, b1.promise, b2.promise]);
+      await Promise.all([b.promise, c.promise]);
 
       let filteredStreamieWasDrained = false;
       const initialStreamie = streamie(async (input: number) => input * 3, {});
@@ -82,11 +63,12 @@ describe('Streamie', () => {
 
     // Test type error when handler input type does not match batched input
     test('type error when handler input type does not match batched input', () => {
-      // Should cause a type error because handler expects number but input is number[]
+      const a = streamie((value: number) => value, {});
+      // Should cause a type error because the batched stage hands the handler number[]
       // @ts-expect-error
-      const a = streamie((values: number, { push, index }) => {
-        push(values * 2); // Error: values is number[], cannot multiply
-      }, { batchSize: 5 });
+      a.batch(5).map((values: number, { push, index }) => {
+        return values * 2; // Error: values is number[], cannot multiply
+      }, {});
     });
 
     test('type error when casting map input to wrong type (while including tools object (push, drain), which previously resulted in inference failures', () => {
@@ -100,15 +82,16 @@ describe('Streamie', () => {
         const { data } = await fetchCommentsBatch({ username: 'hi', after });
         if (data.after) push(data.after);
         else drain();
-    
+
         const comments = data.children.map(({ data }: { data: Comment }) => data);
         return comments;
-      }, { seed: null, flatten: true })
+      }, { seed: null })
+      .flatten()
       .map(async (comment, { index }) => {
         // @ts-expect-error
         const shouldFail: number = comment;
         const shouldWork: Comment = comment; // Ensure it's inferred as Comment
-        
+
       }, { });
     });
 
@@ -122,10 +105,11 @@ describe('Streamie', () => {
       const stream = streamie(async (after: string | null, { push }) => {
         const { data } = await fetchCommentsBatch({ username: 'hi', after });
         if (data.after) push(data.after);
-    
+
         const comments = data.children.map(({ data }) => data);
         return comments;
-      }, { seed: null, flatten: true })
+      }, { seed: null })
+      .flatten();
     });
   });
 });

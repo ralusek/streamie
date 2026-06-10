@@ -21,15 +21,17 @@ describe('Streamie', () => {
       expect(filteredStreamieWasDrained).toBe(true);
     });
 
-    // Test the filter function with batchSize > 1
-    test('filter function with batchSize > 1', async () => {
+    // Test the filter function on batched items
+    test('filter function on batched items', async () => {
       let filteredStreamieWasDrained = false;
       const initialStreamie = streamie(async (input: number) => input * 3, {});
 
       const result: number[][] = [];
-      const filteredStreamie = initialStreamie.filter((outputs) => {
+      const filteredStreamie = initialStreamie
+      .batch(3)
+      .filter((outputs) => {
         return outputs.every(output => output % 2 === 0);
-      }, { batchSize: 3 })
+      }, {})
       .map((values) => {
         result.push(values);
       }, {});

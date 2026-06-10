@@ -15,16 +15,12 @@ It provides a wide array of features like pagination, mapping, filtering, batchi
 
 Because it's the simplest and most familiar interface for common but complex behaviors on indefinite data.
 
-1.) A `streamie` has useful iterator methods like `.map`, `.filter`, and `.push` on an infinite, asynchronous collection. All handler functions in these iterators are themselves asynchronous, so promises returned in them will be awaited for the item to have been considered processed and the queue to progress.
+A `streamie` has useful iterator methods like `.map`, `.filter`, and `.push` on an infinite, asynchronous collection. All handler functions in these iterators are themselves asynchronous, so promises returned in them will be awaited for the item to have been considered processed and the queue to progress.
 
-2.) A `streamie` offers an extremely simple interface for modifying control flow through various asynchronous activities, notably:
+A `streamie` offers an extremely simple interface for modifying control flow through various asynchronous activities, notably:
   - `concurrency`: for any iterative method, a `concurrency` can be specified to parallelize that asynchronous action
-  - `batching`/`flattening`: for any iterative method, a `batchSize` can be specified to allow a batching of inputs up to this count before executing the iterator method. Likewise a `flatten`: `true` may be specified to flatten the input of the an iterator method.
+  - `batching`/`flattening`: `.batch(n)` groups stream items into arrays of up to `n` before passing them on, and `.flatten()` does the opposite, emitting the elements of array items individually. Because these are pipeline stages rather than config flags, the item type at any point in a chain is always plain and inference just flows.
   - `backpressure`: backpressure is **automatically** handled so that asynchronous tasks at different points in the pipeline cannot iterate beyond what its outputs are capable of handling.
-
-3.) Fully typed in TypeScript with inference in most cases.
-
-Seriously, check out this interface.
 
 # Installation
 `npm install --save streamie`
@@ -73,36 +69,37 @@ We can begin by flattening the output of this streamie, so rather than streaming
 chunks of 50, they stream out as individual items.
 
 ```ts
-const paginator = streamie(async (page: number, { push }) => {
+const items = streamie(async (page: number, { push }) => {
   const data = await fetchData(page);
   if (data.hasMore) {
     push(page + 1);
   }
   return data.items;
-}, { seed: 0, flatten: true });
+}, { seed: 0 })
+.flatten();
 ```
 
 Now's let's do an example of handling them individually
 
 ```ts
-paginator
-.map((item: Item) => {
+items
+.map((item) => {
   return doSomethingIndividually(item);
-}, {});
+});
 ```
 
 ## Batching
 
 Or we can go in the opposite direction, where we're then going to take these individual items
 streaming out, and we have an api we can use that can accept 10 of them in a single request.
-By using batchSize, anything > 1 will group up the inputs into a batch of that size prior to
-calling the handler.
+`.batch(10)` will group up the items into arrays of that size before passing them on.
 
 ```ts
-paginator
-.map((items: Item[]) => {
-  return upload10AtATime(items);
-}, { batchSize: 10 });
+items
+.batch(10)
+.map((batch) => {
+  return upload10AtATime(batch);
+});
 ```
 
 ## Concurrency
@@ -111,17 +108,18 @@ Well what if this API let us do that, and said we could upload 10 in a single re
 5 of those requests simultaneously?
 
 ```ts
-paginator
-.map((items: Item[]) => {
-  return upload10AtATime(items);
-}, { batchSize: 10, concurrency: 5 });
+items
+.batch(10)
+.map((batch) => {
+  return upload10AtATime(batch);
+}, { concurrency: 5 });
 ```
 
 ## Draining/Completion/Promises
 
 And what happens when we're done? Well, you can call `streamie.drain()` to drain the remainder of the items.
-If a batchSize is in effect, the final batch during draining is allowed to be less than that number in order
-to fully drain. Upstream streamies will signal to downstream ones to drain when all of their inputs have
+A `.batch(n)` stage being drained is allowed to emit a final batch smaller than `n` in order to fully drain.
+Upstream streamies will signal to downstream ones to drain when all of their inputs have
 drained.
 
 Every streamie returns a promise that will be resolved upon being fully drained. A streamie's handler can also
@@ -134,16 +132,18 @@ const paginator = streamie(async (page: number, { push, drain }) => {
     push(page + 1);
   } else drain();
   return data.items;
-}, { seed: 0, flatten: true });
+}, { seed: 0 });
 ```
 
 And to mark the process complete with the promise, here's the whole thing:
 
 ```ts
 await paginator
-.map((items: Item[]) => {
-  return upload10AtATime(items);
-}, { batchSize: 10, concurrency: 5 })
+.flatten()
+.batch(10)
+.map((batch) => {
+  return upload10AtATime(batch);
+}, { concurrency: 5 })
 .promise;
 
 // Here, the process is complete.
@@ -151,18 +151,22 @@ await paginator
 
 ## Typescript
 
-In most cases, the types can be inferred, however, if you have certain combinations of
-modifiers, Typescript struggles to infer correctly. The generics have a simple interface
-for specifying the input queue item type and the output item queue type, as well as the
-config object.
+Because batching and flattening are pipeline stages rather than config flags, the item
+type at every point in a chain is concrete and inference flows through `.map`, `.filter`,
+`.batch`, and `.flatten` without annotations. If you do need to specify types explicitly,
+the generics are simply the input item type and the handler return type:
 
-The generics are specified like this:
 ```ts
-streamie<number, number[], { batchSize: 2}>(
-  (inputs: number[]) => inputs.map(input => input * 2),
-  { batchSize: 2 }
-);
+streamie<number, number>(
+  (input) => input * 2,
+  {}
+)
+.batch(2) // Streamie<number, number[]>
+.map((pair) => pair[0] + pair[1]); // Streamie<number[], number>
 ```
+
+`.flatten()` is only callable on a streamie whose items are arrays, and emits their
+elements individually.
 
 # Contributing
 We welcome contributions! Please see our contributing guidelines for more information.

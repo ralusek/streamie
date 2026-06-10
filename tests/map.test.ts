@@ -20,26 +20,29 @@ describe('Streamie', () => {
       expect(mappedStreamieWasDrained).toBe(true);
     });
 
-    // Test the map function with batchSize > 1
-    test('map function with batchSize > 1', async () => {
+    // Test the map function downstream of a batch combinator
+    test('map function on batched stages', async () => {
       let mappedStreamieWasDrained = false;
-      const initialStreamie = streamie(
-        (inputs: number[]) => inputs.map(input => input * 2),
-        { batchSize: 2 }
-      );
-      
+      const initialStreamie = streamie((input: number) => input, {});
+
+      const doubledBatches = initialStreamie
+      .batch(2)
+      .map((inputs) => inputs.map(input => input * 2), {});
+
       const expectationsByBatch = [
         [2, 4],
         [6, 8],
       ];
       const result: number[] = [];
-      const mappedStreamie = initialStreamie.map((outputs) => {
+      const mappedStreamie = doubledBatches
+      .batch(2)
+      .map((outputs) => {
         outputs.forEach((pair, index) => {
           const expectation = expectationsByBatch[index];
           expect(pair).toEqual(expectation);
         });
         result.push(...outputs.flat().map(output => output + 1));
-      }, { batchSize: 2 });
+      }, {});
       mappedStreamie.onDrained(() => {
         mappedStreamieWasDrained = true;
         expect(result).toEqual([3, 5, 7, 9]);
@@ -51,22 +54,28 @@ describe('Streamie', () => {
       expect(mappedStreamieWasDrained).toBe(true);
     });
 
-    test('map function with batchSize > 1 and flatten: true', async () => {
+    test('map function with batch and flatten combinators', async () => {
       let mappedStreamieWasDrained = false;
-      const initialStreamie = streamie((inputs: number[]) => inputs.map(input => input * 2), { batchSize: 2, flatten: true });
-      
+      const initialStreamie = streamie((input: number) => input, {});
+
+      const doubled = initialStreamie
+      .batch(2)
+      .map((inputs) => inputs.map(input => input * 2), {})
+      .flatten();
+
       const expectationsByBatch = [
         [2, 4, 6],
         [8],
       ];
       const result: number[] = [];
       let i = 0;
-      const mappedStreamie = initialStreamie.map(
-      (outputs) => {
+      const mappedStreamie = doubled
+      .batch(3)
+      .map((outputs) => {
         const expectation = expectationsByBatch[i++];
         expect(outputs).toEqual(expectation);
         result.push(...outputs.map(output => output + 1));
-      }, { batchSize: 3});
+      }, {});
 
       mappedStreamie.onDrained(() => {
         mappedStreamieWasDrained = true;
@@ -80,7 +89,7 @@ describe('Streamie', () => {
     });
 
       // Test it all together
-    test('a combination of filter and batch size and flatten', async () => {
+    test('a combination of filter and batch and flatten', async () => {
       let filteredStreamieWasDrained = false;
       let finalStreamieWasDrained = false;
       const initialStreamie = streamie((input: number) => input, {});
@@ -89,16 +98,15 @@ describe('Streamie', () => {
       const filteredStreamie = initialStreamie.filter((output) => {
         return output % 2 === 0;
       }, {})
-      .filter((output) => {
-        return output[1] > 4;
-      }, { isFilter: true, batchSize: 2 })
-      .map((output) => {
-        return output;
-      }, { flatten: true })
+      .batch(2)
+      .filter((pair) => {
+        return pair[1] > 4;
+      }, {})
+      .flatten()
       .map((output) => {
         return output * 2;
       }, {});
-      
+
       const final = filteredStreamie.map((final) => {
         result.push(final);
       }, {});

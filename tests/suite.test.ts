@@ -8,16 +8,18 @@ const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 describe('Streamie', () => {
   describe('TypeScript Types and Configurations', () => {
-    // Test streamie with batchSize > 1 without flatten
-    test('streamie with batchSize > 1 without flatten', async () => {
-      const a = streamie((values: number[], { push, index }) => {
+    // Test the batch combinator without flatten
+    test('batch combinator without flatten', async () => {
+      const a = streamie((value: number) => value, {});
+
+      const sums = a.batch(3).map((values) => {
         // values should be number[]
         const sum = values.reduce((acc, val) => acc + val, 0);
         return sum; // Returns number
-      }, { batchSize: 3 });
+      }, {});
 
       const result: number[] = [];
-      a.map((value) => {
+      const final = sums.map((value) => {
         // value should be number
         result.push(value);
       }, {});
@@ -29,21 +31,26 @@ describe('Streamie', () => {
       a.push(5);
       a.push(6); // batchSize reached, handler called
       a.drain();
-      await a.promise;
+      await final.promise;
 
       expect(result).toEqual([6, 15]); // [1+2+3, 4+5+6]
     });
 
-    // Test streamie with batchSize > 1 with flatten
-    test('streamie with batchSize > 1 with flatten', async () => {
-      const a = streamie((values: number[], { push, index }) => {
+    // Test the batch combinator with flatten
+    test('batch combinator with flatten', async () => {
+      const a = streamie((value: number) => value, {});
+
+      const flattened = a
+      .batch(2)
+      .map((values) => {
         // values is number[]
         // Return an array of strings
         return values.map((val) => `Value: ${val}`);
-      }, { batchSize: 2, flatten: true });
+      }, {})
+      .flatten();
 
       const result: string[] = [];
-      const b = a.map((value) => {
+      const b = flattened.map((value) => {
         // value should be string
         result.push(value);
       }, {});
@@ -58,24 +65,26 @@ describe('Streamie', () => {
       expect(result).toEqual(['Value: 1', 'Value: 2', 'Value: 3', 'Value: 4']);
     });
 
-    // Test type error when handler return type does not match with flatten
-    test('type error when handler return type does not match with flatten', () => {
-      // Should cause a type error because handler returns non-array but flatten is true
-      // @ts-expect-error
+    // Test type error when flattening a stream whose items are not arrays
+    test('type error when flattening a stream of non-array items', () => {
       const a = streamie((values: number[], { push, index }) => {
         return `Sum: ${values.reduce((acc, val) => acc + val, 0)}`; // Returns string
-      }, { batchSize: 2, flatten: true });
+      }, {});
+
+      // @ts-expect-error flatten is only callable when stream items are arrays
+      a.flatten();
     });
 
-    // Test handler returning non-array with flatten false
-    test('handler returning non-array with flatten false', async () => {
-      // This is acceptable because flatten is false
-      const a = streamie((values: number[], { push, index }) => {
+    // Test batched handler returning a non-array
+    test('batched handler returning non-array', async () => {
+      const a = streamie((value: number) => value, {});
+
+      const b = a.batch(2).map((values) => {
         return `Sum: ${values.reduce((acc, val) => acc + val, 0)}`; // Returns string
-      }, { batchSize: 2, flatten: false });
+      }, {});
 
       const result: string[] = [];
-     const b = a.map((value) => {
+      const final = b.map((value) => {
         // value should be string
         result.push(value);
       }, {});
@@ -86,26 +95,28 @@ describe('Streamie', () => {
       a.push(4); // batchSize reached
       a.drain();
 
-      await b.promise;
+      await final.promise;
 
       expect(result).toEqual(['Sum: 3', 'Sum: 7']);
     });
 
-    // Test filter function with batchSize > 1
-    test('filter function with batchSize > 1', async () => {
-      const a = streamie((values: number[], { push, index }) => {
+    // Test filter function downstream of batched stages
+    test('filter function downstream of batched stages', async () => {
+      const a = streamie((value: number) => value, {});
+
+      const sums = a.batch(2).map((values) => {
         // values is number[]
         const sum = values.reduce((acc, val) => acc + val, 0);
         return sum; // Returns number
-      }, { batchSize: 2 });
+      }, {});
 
       const result: number[] = [];
-      const filtered = a.filter((sum: number) => {
+      const filtered = sums.filter((sum: number) => {
         // sum is number
         return sum % 2 === 0; // Keep even sums
       }, {});
 
-      filtered.map((value) => result.push(value), {});
+      const final = filtered.map((value) => result.push(value), {});
 
       a.push(1);
       a.push(2); // sum = 3
@@ -114,7 +125,7 @@ describe('Streamie', () => {
       a.push(5);
       a.push(1); // sum = 6 (even)
       a.drain();
-      await filtered.promise;
+      await final.promise;
 
       expect(result).toEqual([8, 6]); // Only even sums
     });
@@ -184,7 +195,7 @@ describe('Streamie', () => {
 
       await expect(a.promise).rejects.toThrow('Encountered an error while processing input: Test error');
       await expect(b.promise).rejects.toThrow('Encountered an error while processing input: Test error');
-      
+
       expect(erroredA).toBe(true);
       expect(erroredB).toBe(true);
 
@@ -289,14 +300,14 @@ describe('Streamie', () => {
       expect(result).toEqual([]);
     });
 
-    // Test multiple outputs with flatten true
-    test('multiple outputs with flatten true', async () => {
+    // Test multiple outputs with the flatten combinator
+    test('multiple outputs with the flatten combinator', async () => {
       const a = streamie((value: number, { push, index }) => {
         return [value, value * 2];
-      }, { flatten: true });
+      }, {});
 
       const result: number[] = [];
-      const b = a.map((value) => result.push(value), {});
+      const b = a.flatten().map((value) => result.push(value), {});
 
       a.push(1);
       a.push(2);

@@ -4,10 +4,15 @@
   "description": "Library for processing data using common array behaviors.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
+    "bench": "node --expose-gc benchmark/fused-vs-composed.js",
     "test": "node --max-old-space-size=8192 ./node_modules/.bin/jest",
-    "test:types": "tsc -p tsconfig.type-tests.json --noEmit"
+    "test:types": "tsc -p tsconfig.type-tests.json --noEmit",
+    "test:memory": "node --expose-gc --max-old-space-size=8192 ./node_modules/.bin/jest --config jest.memory.config.js --runInBand"
   },
   "keywords": [],
   "author": "Tomas Savigliano <ralusek@gmail.com>",

@@ -8,6 +8,8 @@
 // What is possible, however, are false positives, where the test fails because the garbage collector
 // hasn't run yet, and the memory increase is due to memory that simply hasn't been cleaned up yet,
 // rather than being fundamentally tied up in a memory leak.
+// To mitigate that, these tests are run via `npm run test:memory`, which passes --expose-gc so
+// that every measurement below is taken after a forced collection.
 
 import streamie from '../src';
 
@@ -129,11 +131,12 @@ describe('streamie memory usage', () => {
     const ops = newStreamie
     .map(async (x) => x * 3, {})
     .filter(async (x) => x % 2 === 0, {})
+    .batch(2)
     .map(async ([x1, x2]) => {
       const result = (x1 + x2) * 4;
       items.push({ result, x1, x2, memoryWasting: new Array(1000).fill(LOREM) });
       return result;
-    }, { batchSize: 2 });
+    }, {});
 
     let error: any;
     try {
@@ -164,11 +167,12 @@ describe('streamie memory usage', () => {
     const ops = newStreamie
     .map(async (x) => x * 3, {})
     .filter(async (x) => x % 2 === 0, {})
+    .batch(2)
     .map(async ([x1, x2]) => {
       const result = (x1 + x2) * 4;
       amount++;
       return { result, x1, x2, memoryWasting: new Array(1000).fill(LOREM) }
-    }, { batchSize: 2 })
+    }, {})
     .map(async (x) => x.result, {});
 
     let error: any;
@@ -228,7 +232,13 @@ function getMemoryLeakTester({
   let increasedCount = 0;
   
   return async function checkForLeak(rest?: number) {
+    // The rest serves two purposes: it gives in-flight pipeline work time to settle,
+    // and (without --expose-gc) it idles in the hope that GC runs. It is kept even
+    // when gc is available so that pipeline timing stays the same either way.
     await awaitTimeout(rest ?? restForGC);
+    // Under npm run test:memory (--expose-gc), force a collection so the measurement
+    // reflects reachable memory rather than whatever the GC hasn't gotten to yet.
+    global.gc?.();
 
     const used = getMemoryUsage();
     console.log('Memory usage', used, starting, increaseThresholdValue, lastThresholdBreach, increasedCount);
