@@ -14,6 +14,9 @@ import {
 // Validation
 import * as validate from './validation';
 
+// Data structures
+import RingBuffer from './utils/dataStructures/ringBuffer';
+
 type TimeoutId = ReturnType<typeof setTimeout>;
 
 export default function streamie<I, R>(
@@ -31,20 +34,23 @@ export default function streamie<I, R>(
   const internalConfig = config as InternalConfig;
 
   const queue: {
-    input: I[];
+    input: RingBuffer<I>;
     output: {
       // A queue pairing the input items with their final stream output item. The input
       // is a single item for unbatched streamies, or the handled batch for batched ones.
-      success: {
+      success: RingBuffer<{
         input: I | I[];
         output: OutputItem;
-      }[];
+      }>;
     };
   } = {
-    // TODO make these linked lists
-    input: [],
+    // Ring buffers rather than plain arrays: dequeuing from an array via
+    // shift/splice reindexes every remaining element, which goes quadratic when a
+    // queue gets deep (see the rationale in the RingBuffer header and the numbers
+    // in benchmark/queue-backlog.js).
+    input: new RingBuffer(),
     output: {
-      success: [],
+      success: new RingBuffer(),
     },
   };
 
@@ -169,19 +175,23 @@ export default function streamie<I, R>(
     // the output queue.
     if (settings.isFilter) {
       if (!handlerOutput) return; // Handler returned false, so we do not push anything to the output queue.
-      const successQueue = queue.output.success as { input: unknown, output: unknown }[];
+      const successQueue = queue.output.success as RingBuffer<{ input: unknown, output: unknown }>;
       if (!settings.flatten) {
         successQueue.push({ input: handlerInput, output: handlerInput });
         return;
       }
       if (!Array.isArray(handlerInput)) throw new Error('Cannot flatten input that is not an array.');
-      successQueue.push(...handlerInput.map((input) => ({ input, output: input })));
+      for (let i = 0; i < handlerInput.length; i++) {
+        successQueue.push({ input: handlerInput[i], output: handlerInput[i] });
+      }
       return;
     }
 
     if (settings.flatten) {
       if (!Array.isArray(handlerOutput)) throw new Error('Cannot flatten output that is not an array.');
-      queue.output.success.push(...(handlerOutput as OutputItem[]).map((output) => ({ input: handlerInput, output })));
+      for (let i = 0; i < handlerOutput.length; i++) {
+        queue.output.success.push({ input: handlerInput, output: handlerOutput[i] as OutputItem });
+      }
     }
     else queue.output.success.push({ input: handlerInput, output: handlerOutput as OutputItem });
   }
@@ -194,8 +204,13 @@ export default function streamie<I, R>(
 
     state.lastHandledAt = Date.now();
     state.count.handling++;
-    const itemsToHandle = queue.input.splice(0, settings.batchSize);
-    const handlerInput = (settings.batchSize === 1 ? itemsToHandle[0] : itemsToHandle) as I | I[];
+    // Unbatched streamies (the common case) take the single item directly, which
+    // also avoids allocating a one-item array per invocation; batched ones dequeue
+    // up to a batch's worth. Only reached when checkCanProcessInput has confirmed
+    // the queue is non-empty, hence the non-null assertion.
+    const handlerInput = (settings.batchSize === 1
+      ? queue.input.shift()!
+      : queue.input.shiftMany(settings.batchSize)) as I | I[];
 
     if (startedWithBackpressure && !state.backpressure.input) {
       eventHandlers.onBackpressureRelease.forEach((eventHandler) => {
@@ -418,7 +433,7 @@ export default function streamie<I, R>(
     if (state.isHalted) throw new Error('Cannot push to a halted streamie.');
     if (state.shouldDrain) throw new Error(`Cannot push to a ${ state.isDrained ? 'drained' : 'draining'} streamie.`);
 
-    queue.input.push(...items);
+    for (let i = 0; i < items.length; i++) queue.input.push(items[i]);
     scheduleProcess();
   }
 
@@ -609,7 +624,7 @@ export default function streamie<I, R>(
     if (state.isHalted) throw new Error('Cannot push to a halted streamie.');
     if (state.shouldDrain) throw new Error(`Cannot push to a ${ state.isDrained ? 'drained' : 'draining'} streamie.`);
 
-    queue.input.push(...items);
+    for (let i = 0; i < items.length; i++) queue.input.push(items[i]);
     requestProcess();
   }
 
