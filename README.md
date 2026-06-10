@@ -149,6 +149,35 @@ await paginator
 // Here, the process is complete.
 ```
 
+## Async Iteration
+
+Every streamie is an async iterable, so its outputs can be consumed with `for await...of`:
+
+```ts
+const doubled = streamie(async (input: number) => input * 2, {});
+
+doubled.push(1, 2, 3);
+doubled.drain();
+
+for await (const item of doubled) {
+  console.log(item); // 2, 4, 6
+}
+```
+
+The loop ends when the streamie drains, and throws if it errors. Iteration participates
+in backpressure: the streamie only runs ahead of the loop by its own bounded output
+queue, so a slow consumer slows the whole pipeline rather than letting items accumulate.
+Breaking out of the loop early simply detaches the iterator; the streamie continues
+processing for any other consumers.
+
+This also makes streamies consumable by anything that accepts an async iterable, e.g.
+`Readable.from(myStreamie)` to bridge into a Node stream.
+
+Two things to note: an iterator only observes items processed after it was created, so
+begin iterating in the same synchronous block as your pushes (the same contract as
+attaching a `.map`), and multiple concurrent iterators each receive every item, since
+outputs are broadcast to all consumers.
+
 ## Typescript
 
 Because batching and flattening are pipeline stages rather than config flags, the item

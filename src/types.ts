@@ -67,6 +67,13 @@ export type Streamie<I, O> = {
   registerInput: (inputStreamie: Streamie<any, I>) => void;
   registerOutput: (outputStreamie: Streamie<O, any>) => void;
 
+  // Each call registers a fresh consumer of this streamie's outputs, participating in
+  // backpressure: the source only stays ahead of the iterator's pulls by its own
+  // bounded output queue. Concurrent iterators each observe every item (outputs are
+  // broadcast to all consumers); an iterator only observes items processed after it
+  // was created.
+  [Symbol.asyncIterator]: () => AsyncIterableIterator<O>;
+
   onBackpressureRelease: (eventHandler: () => void) => void;
   onDrained: (eventHandler: () => void) => void;
   onDraining: (eventHandler: () => void) => void;

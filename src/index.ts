@@ -16,6 +16,7 @@ import * as validate from './validation';
 
 // Data structures
 import RingBuffer from './utils/dataStructures/ringBuffer';
+import createAsyncIterator from './utils/asyncIterator';
 
 type TimeoutId = ReturnType<typeof setTimeout>;
 
@@ -671,6 +672,8 @@ export default function streamie<I, R>(
     onDraining,
     onError,
     onHalted,
+
+    [Symbol.asyncIterator]: () => createAsyncIterator(registerOutput, state),
 
     _pushQueueError,
     _receive,
