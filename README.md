@@ -167,7 +167,7 @@ and resume on the `onBackpressureRelease` event.
 
 ```ts
 if (doubled.push(item).backpressure) {
-  await new Promise<void>((resolve) => doubled.onBackpressureRelease(resolve));
+  await new Promise<void>((resolve) => doubled.onBackpressureRelease.once(resolve));
 }
 ```
 
@@ -185,6 +185,29 @@ A few behaviors worth knowing:
   - A filter stage's receipt resolves with the item itself once it has been
     processed, whether or not it passed the predicate; a batch stage's receipts each
     resolve with the batch their item joined.
+
+## Events
+
+A streamie exposes five lifecycle events: `onBackpressureRelease`, `onDraining`,
+`onDrained`, `onError`, and `onHalted`. Each is callable to attach a persistent
+handler, carries `.once` for handlers that remove themselves after one invocation,
+and both forms return an unsubscribe function:
+
+```ts
+const unsubscribe = s.onError((error) => log(error));
+s.onDrained.once(() => console.log('done'));
+unsubscribe();
+```
+
+`onDraining`, `onDrained`, and `onHalted` are one-way transitions and latch: a
+handler attached after the transition has already occurred is invoked immediately,
+so subscribers never need to check state first. `onBackpressureRelease` and
+`onError` are recurring.
+
+Note that a halt is not a drain: when a streamie halts on an error, `onHalted`
+fires but `onDraining`/`onDrained` do not. A handler attached during an event's
+firing waits for the next firing rather than being invoked by the one in flight
+(except on an already-latched event, where it is invoked immediately as above).
 
 ## Async Iteration
 

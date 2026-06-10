@@ -1,4 +1,7 @@
 import { StreamieQueueError } from './error';
+import type { Subscribe, Unsubscribe } from './utils/events';
+
+export type { Subscribe, Unsubscribe };
 
 export type MaybePromise<T> = T | Promise<T>;
 
@@ -100,11 +103,16 @@ export type Streamie<I, O> = {
   // was created.
   [Symbol.asyncIterator]: () => AsyncIterableIterator<O>;
 
-  onBackpressureRelease: (eventHandler: () => void) => void;
-  onDrained: (eventHandler: () => void) => void;
-  onDraining: (eventHandler: () => void) => void;
-  onError: (eventHandler: (error: StreamieQueueError<I>) => void) => void;
-  onHalted: (eventHandler: () => void) => void;
+  // Lifecycle events. Each is callable to attach a persistent handler and carries
+  // .once for handlers that remove themselves after one invocation; both return an
+  // unsubscribe function. The draining/drained/halted transitions are one-way and
+  // latch: a handler attached after the transition has occurred is invoked
+  // immediately. backpressureRelease and error are recurring.
+  onBackpressureRelease: Subscribe;
+  onDrained: Subscribe;
+  onDraining: Subscribe;
+  onError: Subscribe<StreamieQueueError<I>>;
+  onHalted: Subscribe;
 
   _pushQueueError: (error: StreamieQueueError<any>) => void;
   _receive: (...items: I[]) => void;

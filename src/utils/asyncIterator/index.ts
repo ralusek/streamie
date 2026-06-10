@@ -4,6 +4,7 @@ import type { Streamie } from '../../types';
 
 // Utils
 import RingBuffer from '../dataStructures/ringBuffer';
+import createEventHandlers, { event, Unsubscribe } from '../events';
 
 export default function createAsyncIterator<OutputItem>(
   registerOutput: (outputStreamie: Streamie<OutputItem, any>) => void,
@@ -34,11 +35,15 @@ export default function createAsyncIterator<OutputItem>(
     // _receive resolves a pending pull directly rather than buffering.
     const pendingPulls = new RingBuffer<PendingPull>();
 
-    const consumerEventHandlers = {
-      onBackpressureRelease: new Set<() => void>(),
-      onDraining: new Set<() => void>(),
-      onHalted: new Set<() => void>(),
-    };
+    const consumerEventHandlers = createEventHandlers({
+      backpressureRelease: event(),
+      draining: event({ latching: true }),
+      halted: event({ latching: true }),
+    });
+
+    // Unsubscribes from the source's drained/halted events, so that detaching from a
+    // long-lived source doesn't leave it retaining this consumer.
+    const sourceSubscriptions: Unsubscribe[] = [];
 
     // The source has drained or halted; whatever is buffered is all that remains.
     let isSourceDone = false;
@@ -59,8 +64,9 @@ export default function createAsyncIterator<OutputItem>(
       if (isDetached) return;
       isDetached = true;
       queueMicrotask(() => {
-        consumerEventHandlers.onDraining.forEach((eventHandler) => eventHandler());
-        consumerEventHandlers.onBackpressureRelease.forEach((eventHandler) => eventHandler());
+        consumerEventHandlers.draining.emit();
+        consumerEventHandlers.backpressureRelease.emit();
+        while (sourceSubscriptions.length > 0) sourceSubscriptions.pop()!();
       });
     }
 
@@ -86,7 +92,7 @@ export default function createAsyncIterator<OutputItem>(
         const value = buffer.shift()!;
         // Taking the buffered item clears this consumer's backpressure; the release
         // handler (the source's requestProcess) may synchronously deliver the next item.
-        consumerEventHandlers.onBackpressureRelease.forEach((eventHandler) => eventHandler());
+        consumerEventHandlers.backpressureRelease.emit();
         return Promise.resolve({ value, done: false });
       }
       if (isSourceDone) return Promise.resolve({ value: undefined, done: true });
@@ -122,16 +128,16 @@ export default function createAsyncIterator<OutputItem>(
         get isDrained() { return isEnded; },
         get isHalted() { return false; },
       },
-      onBackpressureRelease: (eventHandler: () => void) => { consumerEventHandlers.onBackpressureRelease.add(eventHandler); },
-      onDraining: (eventHandler: () => void) => { consumerEventHandlers.onDraining.add(eventHandler); },
-      onHalted: (eventHandler: () => void) => { consumerEventHandlers.onHalted.add(eventHandler); },
+      onBackpressureRelease: consumerEventHandlers.backpressureRelease.on,
+      onDraining: consumerEventHandlers.draining.on,
+      onHalted: consumerEventHandlers.halted.on,
       registerInput: (inputStreamie: Streamie<any, OutputItem>) => {
-        inputStreamie.onDrained(handleSourceDone);
+        sourceSubscriptions.push(inputStreamie.onDrained(handleSourceDone));
         // A halt without error propagation ends the iteration silently, the same way
         // a downstream streamie drains when its halted input is removed. When errors
         // do propagate, _pushQueueError has already recorded the rejection by the
         // time the halt event fires.
-        inputStreamie.onHalted(handleSourceDone);
+        sourceSubscriptions.push(inputStreamie.onHalted(handleSourceDone));
       },
       _receive: (item: OutputItem) => {
         if (isEnded || storedError) return;

@@ -17,6 +17,7 @@ import * as validate from './validation';
 // Data structures
 import RingBuffer from './utils/dataStructures/ringBuffer';
 import createAsyncIterator from './utils/asyncIterator';
+import createEventHandlers, { event, type Unsubscribe } from './utils/events';
 import PushReceipt from './utils/pushReceipt';
 
 type TimeoutId = ReturnType<typeof setTimeout>;
@@ -87,7 +88,6 @@ export default function streamie<I, R>(
     isPaused: boolean;
     shouldDrain: boolean;
     isHalted: boolean;
-    hasHandledOnDrained: boolean;
     lastError: StreamieQueueError<I> | null;
   } = {
     count: {
@@ -115,26 +115,25 @@ export default function streamie<I, R>(
     shouldDrain: false,
     isPaused: false,
     isHalted: false,
-    hasHandledOnDrained: false,
     lastError: null,
   };
 
   const outputStreamies: Set<Streamie<OutputItem, any>> = new Set();
   const inputStreamies: Set<Streamie<any, I>> = new Set();
 
-  const eventHandlers: {
-    onBackpressureRelease: Set<() => void>;
-    onDrained: Set<() => void>;
-    onDraining: Set<() => void>;
-    onError: Set<(error: StreamieQueueError<I>) => void>;
-    onHalted: Set<() => void>;
-  } = {
-    onBackpressureRelease: new Set(),
-    onDrained: new Set(),
-    onDraining: new Set(),
-    onError: new Set(),
-    onHalted: new Set(),
-  };
+  const eventHandlers = createEventHandlers({
+    // Fired whenever a dequeue takes the input queue back below its backpressure
+    // threshold — the signal cooperative producers and upstream streamies resume on.
+    backpressureRelease: event(),
+    // The lifecycle transitions are one-way, so they latch: a handler attached after
+    // the transition has occurred is invoked immediately, which is what frees
+    // subscribers (and the registerInput/registerOutput wiring) from caring whether
+    // they attached before or after the event.
+    draining: event({ latching: true }),
+    drained: event({ latching: true }),
+    halted: event({ latching: true }),
+    error: event<StreamieQueueError<I>>(),
+  });
 
   const ref: {
     // The reason we employ internal/external promise is because we want a lazily created external
@@ -159,8 +158,8 @@ export default function streamie<I, R>(
     processScheduled: boolean;
   } = {
     internalPromise: new Promise<null>((resolve, reject) => {
-      onDrained(() => resolve(null));
-      if (settings.haltOnError) onError((error) => reject(error));
+      eventHandlers.drained.on(() => resolve(null));
+      if (settings.haltOnError) eventHandlers.error.on((error) => reject(error));
     }),
     externalPromise: null,
     timeouts: new Set(),
@@ -249,9 +248,7 @@ export default function streamie<I, R>(
         : queue.receipt.shiftMany(settings.batchSize));
 
     if (startedWithBackpressure && !state.backpressure.input) {
-      eventHandlers.onBackpressureRelease.forEach((eventHandler) => {
-        eventHandler();
-      });
+      eventHandlers.backpressureRelease.emit();
     }
 
     const index = state.count.started++;
@@ -437,11 +434,9 @@ export default function streamie<I, R>(
   function handleOnError(queueError: StreamieQueueError<I>) {
     state.lastError = queueError;
     // If this stream is configured to haltOnError, then its own promise
-    // will have registered on onError listener to reject the promise, which
+    // will have registered an error listener to reject the promise, which
     // will be invoked here.
-    eventHandlers.onError.forEach((eventHandler) => {
-      eventHandler(queueError);
-    });
+    eventHandlers.error.emit(queueError);
 
     if (settings.propagateErrors) {
       outputStreamies.forEach((consumer) => {
@@ -455,15 +450,14 @@ export default function streamie<I, R>(
   }
 
   function handleOnDrained() {
-    if (!state.isDrained || state.hasHandledOnDrained) return;
+    if (!state.isDrained) return;
 
     ref.timeouts.forEach((timeoutId) => clearTimeout(timeoutId));
     ref.timeouts.clear();
 
-    state.hasHandledOnDrained = true;
-    eventHandlers.onDrained.forEach((eventHandler) => {
-      eventHandler();
-    });
+    // The drained event latches, so reaching this from multiple paths (every
+    // requestProcess cycle once drained, plus drain() itself) fires it only once.
+    eventHandlers.drained.emit();
   }
 
   function setHalted() {
@@ -481,9 +475,7 @@ export default function streamie<I, R>(
         queue.receipt.shift()?._reject(error);
       }
     }
-    eventHandlers.onHalted.forEach((eventHandler) => {
-      eventHandler();
-    });
+    eventHandlers.halted.emit();
   }
 
 
@@ -600,7 +592,7 @@ export default function streamie<I, R>(
   function drain() {
     if (state.shouldDrain) return;
     state.shouldDrain = true;
-    eventHandlers.onDraining.forEach((eventHandler) => eventHandler());
+    eventHandlers.draining.emit();
     // If there is nothing queued or in flight, the streamie is already drained and the
     // event can fire immediately. This matters for synchronous pipelines, where all
     // processing may already have completed by the time a drain cascades down from
@@ -645,37 +637,23 @@ export default function streamie<I, R>(
     if (outputStreamie.state.isHalted) throw new Error('Cannot register a halted streamie as an output.');
     if (outputStreamies.has(outputStreamie)) return;
     outputStreamies.add(outputStreamie);
-    outputStreamie.onBackpressureRelease(() => requestProcess());
-    outputStreamie.onHalted(() => outputStreamies.delete(outputStreamie));
-
-    // This would be a strange scenario, but it's not disallowed. If a streamie
-    // with inputs is set to drain, we simply remove it as an output.
-    outputStreamie.onDraining(() => outputStreamies.delete(outputStreamie));
+    // A consumer that halts or drains is no longer ours to feed: it is removed, and
+    // every subscription this registration placed on it is torn down with it, so a
+    // long-lived streamie neither accumulates dead listeners nor retains departed
+    // consumers' closures as consumers come and go (e.g. repeated short-lived async
+    // iterations of one source).
+    const consumerSubscriptions: Unsubscribe[] = [];
+    const removeOutput = () => {
+      outputStreamies.delete(outputStreamie);
+      while (consumerSubscriptions.length > 0) consumerSubscriptions.pop()!();
+    };
+    consumerSubscriptions.push(outputStreamie.onBackpressureRelease(() => requestProcess()));
+    consumerSubscriptions.push(outputStreamie.onHalted(removeOutput));
+    // Removal on draining would be a strange scenario, but it's not disallowed: if a
+    // streamie with inputs is set to drain, we simply remove it as an output.
+    consumerSubscriptions.push(outputStreamie.onDraining(removeOutput));
 
     outputStreamie.registerInput(self);
-  }
-
-  function onBackpressureRelease(eventHandler: () => void) {
-    eventHandlers.onBackpressureRelease.add(eventHandler);
-  }
-
-  function onDrained(eventHandler: () => void) {
-    if (state.isDrained) return eventHandler();
-    eventHandlers.onDrained.add(eventHandler);
-  }
-
-  function onDraining(eventHandler: () => void) {
-    if (state.shouldDrain) return eventHandler();
-    eventHandlers.onDraining.add(eventHandler);
-  }
-
-  function onError(eventHandler: (error: StreamieQueueError<I>) => void) {
-    eventHandlers.onError.add(eventHandler);
-  }
-
-  function onHalted(eventHandler: () => void) {
-    if (state.isHalted) return eventHandler();
-    eventHandlers.onHalted.add(eventHandler);
   }
 
   // Private functions
@@ -745,11 +723,15 @@ export default function streamie<I, R>(
       },
     },
 
-    onBackpressureRelease,
-    onDrained,
-    onDraining,
-    onError,
-    onHalted,
+    // The subscription side of the lifecycle events: each is callable to attach a
+    // handler (returning an unsubscribe) and carries .once for self-removing
+    // handlers. The latching events handle already-transitioned subscribers
+    // themselves, so no state checks are needed here.
+    onBackpressureRelease: eventHandlers.backpressureRelease.on,
+    onDrained: eventHandlers.drained.on,
+    onDraining: eventHandlers.draining.on,
+    onError: eventHandlers.error.on,
+    onHalted: eventHandlers.halted.on,
 
     [Symbol.asyncIterator]: () => createAsyncIterator(registerOutput, state),
 

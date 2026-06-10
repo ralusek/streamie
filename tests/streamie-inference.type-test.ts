@@ -1,5 +1,6 @@
 import streamie from '../dist';
 import type { Streamie } from '../dist/types';
+import type { StreamieQueueError } from '../dist/error';
 
 /*
   Run this with tsc, not Jest alone.
@@ -234,6 +235,25 @@ export type BatchReceipt_Output = Expect<
 
 // @ts-expect-error push accepts numbers here, not strings
 source1.push('1');
+
+// ---------------------------------------------------------------------------
+// Events
+// ---------------------------------------------------------------------------
+
+// Subscriptions return unsubscribe functions, for both persistent and once handlers.
+const offDrained = source1.onDrained(() => {});
+export type OnDrained_ReturnsUnsubscribe = Expect<Equal<typeof offDrained, () => void>>;
+
+const offBackpressureOnce = source1.onBackpressureRelease.once(() => {});
+export type Once_ReturnsUnsubscribe = Expect<
+  Equal<typeof offBackpressureOnce, () => void>
+>;
+
+// The error event's payload is the streamie's own queue error type.
+source1.onError((error) => {
+  type ErrorPayload = Expect<Equal<typeof error, StreamieQueueError<number>>>;
+  type ErrorPayload_NotAny = Expect<NotAny<typeof error>>;
+});
 
 // Prevent accidental widening to any in the core inference path.
 export type _NoUnexpectedAny = [
