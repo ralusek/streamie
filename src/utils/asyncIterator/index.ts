@@ -11,6 +11,8 @@ export default function createAsyncIterator<OutputItem>(
   state: {
     isHalted: boolean;
     isDrained: boolean;
+    isAborted: boolean;
+    abortError: unknown;
     lastError: StreamieQueueError<any> | null;
   },
 ): AsyncIterableIterator<OutputItem> {
@@ -49,8 +51,11 @@ export default function createAsyncIterator<OutputItem>(
     let isSourceDone = false;
     // The iteration itself is over: returned early, or a propagated error delivered.
     let isEnded = false;
-    // A propagated error awaiting delivery to the next next() call.
-    let storedError: unknown = null;
+    // A propagated error awaiting delivery to the next next() call. Abort errors are
+    // arbitrary external values — including falsey ones — so "none" needs a dedicated
+    // sentinel rather than null and a truthiness check.
+    const NO_STORED_ERROR = Symbol('noStoredError');
+    let storedError: unknown = NO_STORED_ERROR;
     let isDetached = false;
 
     // Unhooks this consumer from the source: firing its onDraining handlers tells the
@@ -70,6 +75,22 @@ export default function createAsyncIterator<OutputItem>(
       });
     }
 
+    // Ends the iteration abnormally: the error preempts buffered output, mirroring
+    // how error propagation between streamies is immediate rather than queued behind
+    // in-flight items. Delivered to a pending pull if one is waiting, otherwise
+    // stored for the next next() call.
+    function deliverTerminalError(error: unknown) {
+      if (isEnded || isSourceDone || storedError !== NO_STORED_ERROR) return;
+      buffer = new RingBuffer();
+      if (pendingPulls.length > 0) {
+        isEnded = true;
+        while (pendingPulls.length > 0) pendingPulls.shift()!.reject(error);
+      } else {
+        storedError = error;
+      }
+      detach();
+    }
+
     function handleSourceDone() {
       if (isSourceDone || isEnded) return;
       isSourceDone = true;
@@ -81,9 +102,9 @@ export default function createAsyncIterator<OutputItem>(
     }
 
     function next(): Promise<IteratorResult<OutputItem, undefined>> {
-      if (storedError) {
+      if (storedError !== NO_STORED_ERROR) {
         const error = storedError;
-        storedError = null;
+        storedError = NO_STORED_ERROR;
         isEnded = true;
         return Promise.reject(error);
       }
@@ -107,7 +128,7 @@ export default function createAsyncIterator<OutputItem>(
     function return_(): Promise<IteratorResult<OutputItem, undefined>> {
       if (!isEnded) {
         isEnded = true;
-        storedError = null;
+        storedError = NO_STORED_ERROR;
         buffer = new RingBuffer();
         while (pendingPulls.length > 0) {
           pendingPulls.shift()!.resolve({ value: undefined, done: true });
@@ -136,11 +157,18 @@ export default function createAsyncIterator<OutputItem>(
         // A halt without error propagation ends the iteration silently, the same way
         // a downstream streamie drains when its halted input is removed. When errors
         // do propagate, _pushQueueError has already recorded the rejection by the
-        // time the halt event fires.
-        sourceSubscriptions.push(inputStreamie.onHalted(handleSourceDone));
+        // time the halt event fires. An abort, though, carries its own termination
+        // error in the halt payload and rejects the loop directly.
+        sourceSubscriptions.push(inputStreamie.onHalted(({ isAborted, abortError }) => {
+          // The undefined check (rather than ??) is deliberate: abort errors are
+          // arbitrary external values, so null and other falsey reasons are delivered
+          // as given; only a bare abort() gets the generic error.
+          if (isAborted) deliverTerminalError(abortError === undefined ? new Error('Streamie was aborted.') : abortError);
+          else handleSourceDone();
+        }));
       },
       _receive: (item: OutputItem) => {
-        if (isEnded || storedError) return;
+        if (isEnded || storedError !== NO_STORED_ERROR) return;
         if (pendingPulls.length > 0) {
           pendingPulls.shift()!.resolve({ value: item, done: false });
           return;
@@ -148,22 +176,14 @@ export default function createAsyncIterator<OutputItem>(
         buffer.push(item);
       },
       _pushQueueError: (queueError: StreamieQueueError<any>) => {
-        if (isEnded || isSourceDone || storedError) return;
-        // An error preempts buffered output, mirroring how error propagation between
-        // streamies is immediate rather than queued behind in-flight items.
-        buffer = new RingBuffer();
-        if (pendingPulls.length > 0) {
-          isEnded = true;
-          while (pendingPulls.length > 0) pendingPulls.shift()!.reject(queueError);
-        } else {
-          storedError = queueError;
-        }
-        detach();
+        deliverTerminalError(queueError);
       },
     } as unknown as Streamie<OutputItem, any>;
 
     if (state.isHalted) {
-      storedError = state.lastError ?? new Error('Cannot iterate a halted streamie.');
+      storedError = state.isAborted
+        ? (state.abortError === undefined ? new Error('Streamie was aborted.') : state.abortError)
+        : (state.lastError ?? new Error('Cannot iterate a halted streamie.'));
     } else if (state.isDrained) {
       isSourceDone = true;
     } else {

@@ -1,5 +1,5 @@
 import streamie from '../dist';
-import type { Streamie } from '../dist/types';
+import type { Streamie, StreamieHaltPayload } from '../dist/types';
 import type { StreamieQueueError } from '../dist/error';
 
 /*
@@ -254,6 +254,23 @@ source1.onError((error) => {
   type ErrorPayload = Expect<Equal<typeof error, StreamieQueueError<number>>>;
   type ErrorPayload_NotAny = Expect<NotAny<typeof error>>;
 });
+
+// abort accepts an optional arbitrary error — not constrained to StreamieQueueError.
+export type Abort_Signature = Expect<
+  Equal<typeof source1.abort, (error?: unknown) => void>
+>;
+
+// The halted event's payload reports how the halt came about.
+source1.onHalted((payload) => {
+  type HaltPayload = Expect<Equal<typeof payload, StreamieHaltPayload<number>>>;
+  type HaltPayload_LastError = Expect<
+    Equal<typeof payload.lastError, StreamieQueueError<number> | null>
+  >;
+  type HaltPayload_NotAny = Expect<NotAny<typeof payload>>;
+});
+
+// Zero-argument handlers remain assignable to events that carry payloads.
+source1.onHalted(() => {});
 
 // Prevent accidental widening to any in the core inference path.
 export type _NoUnexpectedAny = [

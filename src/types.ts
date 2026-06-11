@@ -43,6 +43,22 @@ export type Tools<I> = {
   index: number;
 };
 
+// The payload of the halted event, distinguishing how the halt came about. A halt is
+// either externally imposed via abort() — own or cascaded from upstream — or the
+// result of a handler error under haltOnError. The fields are deliberately all
+// present rather than collapsed into a single error: a streamie can carry a handler
+// error (haltOnError: false) and later be aborted, and subscribers like stream
+// bridges may care about both.
+export type StreamieHaltPayload<I> = {
+  // True when the halt came from abort() rather than a handler error.
+  isAborted: boolean;
+  // Whatever abort() was called with — an arbitrary external value, not necessarily
+  // a StreamieQueueError. Undefined for a bare abort() and for non-abort halts.
+  abortError: unknown;
+  // The last error thrown by this streamie's own handler invocations, if any.
+  lastError: StreamieQueueError<I> | null;
+};
+
 // The synchronous result of a push.
 export type PushReceipt<O> = {
   // Whether this push left the streamie at or beyond its input backpressure
@@ -93,6 +109,14 @@ export type Streamie<I, O> = {
   pause: (shouldPause?: boolean) => void;
   drain: () => void;
 
+  // Terminates the streamie abnormally through the halt machinery, optionally with an
+  // arbitrary external error. The error becomes the abortError of the onHalted
+  // payload, rejects the streamie's promise and any queued push receipts, and is
+  // delivered to async iterations as a rejection. Idempotent, and a no-op on a
+  // streamie that has already halted or drained. An abort cascades downstream only
+  // when a consumer's feeders have all aborted; see onHalted/README.
+  abort: (error?: unknown) => void;
+
   registerInput: (inputStreamie: Streamie<any, I>) => void;
   registerOutput: (outputStreamie: Streamie<O, any>) => void;
 
@@ -112,7 +136,7 @@ export type Streamie<I, O> = {
   onDrained: Subscribe;
   onDraining: Subscribe;
   onError: Subscribe<StreamieQueueError<I>>;
-  onHalted: Subscribe;
+  onHalted: Subscribe<StreamieHaltPayload<I>>;
 
   _pushQueueError: (error: StreamieQueueError<any>) => void;
   _receive: (...items: I[]) => void;
@@ -125,6 +149,7 @@ export type Streamie<I, O> = {
     isPaused: boolean;
     isDrained: boolean;
     isHalted: boolean;
+    isAborted: boolean;
     count: {
       handling: number;
       started: number;

@@ -149,6 +149,27 @@ await paginator
 // Here, the process is complete.
 ```
 
+## Aborting
+
+Draining is the graceful finish; `abort(error?)` is the abnormal one. It terminates
+the streamie immediately: queued items are abandoned, the streamie's promise and any
+queued push receipts reject with the given error (or a generic one for a bare
+`abort()`), and active `for await` loops reject likewise. Aborting is idempotent and
+a no-op on a streamie that has already drained or halted.
+
+```ts
+const items = streamie(handler, {});
+items.abort(new Error('upstream connection lost'));
+await items.promise; // rejects with the error
+```
+
+An abort flows downstream by the same accounting as draining: a consumer finishes
+when all of its feeders have finished, and that finish is itself an abort only when
+*every* feeder aborted (multiple feeders' abort errors are gathered into an
+`AggregateError`). If even one feeder drained — or halted on its own handler error —
+the consumer drains normally, processing whatever did arrive: one feeder of several
+aborting shouldn't kill a consumer the others completed normally.
+
 ## Push Receipts
 
 `push` takes a single item, is synchronous, and returns a receipt. The receipt's
@@ -208,6 +229,12 @@ Note that a halt is not a drain: when a streamie halts on an error, `onHalted`
 fires but `onDraining`/`onDrained` do not. A handler attached during an event's
 firing waits for the next firing rather than being invoked by the one in flight
 (except on an already-latched event, where it is invoked immediately as above).
+
+`onHalted`'s payload reports how the halt came about:
+`{ isAborted, abortError, lastError }` — `isAborted` and `abortError` describe an
+`abort()`, while `lastError` is the last error thrown by the streamie's own
+handlers. Both can be present: a streamie with `haltOnError: false` that encountered
+a handler error and was later aborted retains each in its respective field.
 
 ## Async Iteration
 

@@ -9,6 +9,7 @@ import {
   InternalConfig,
   MaybePromise,
   Tools,
+  StreamieHaltPayload,
 } from './types';
 
 // Validation
@@ -88,6 +89,11 @@ export default function streamie<I, R>(
     isPaused: boolean;
     shouldDrain: boolean;
     isHalted: boolean;
+    isAborted: boolean;
+    // Whatever abort() was called with. Kept separate from lastError, which retains
+    // its meaning of "the last error encountered within this streamie's own handlers";
+    // an abort error is an arbitrary external value.
+    abortError: unknown;
     lastError: StreamieQueueError<I> | null;
   } = {
     count: {
@@ -115,11 +121,18 @@ export default function streamie<I, R>(
     shouldDrain: false,
     isPaused: false,
     isHalted: false,
+    isAborted: false,
+    abortError: undefined,
     lastError: null,
   };
 
   const outputStreamies: Set<Streamie<OutputItem, any>> = new Set();
   const inputStreamies: Set<Streamie<any, I>> = new Set();
+
+  // Abort accounting for terminated inputs (see handleInputTerminated): the abortError
+  // of each input that aborted, and whether any input halted without aborting.
+  const inputAbortErrors: unknown[] = [];
+  let hasNonAbortHaltedInput = false;
 
   const eventHandlers = createEventHandlers({
     // Fired whenever a dequeue takes the input queue back below its backpressure
@@ -131,7 +144,7 @@ export default function streamie<I, R>(
     // they attached before or after the event.
     draining: event({ latching: true }),
     drained: event({ latching: true }),
-    halted: event({ latching: true }),
+    halted: event<StreamieHaltPayload<I>>({ latching: true }),
     error: event<StreamieQueueError<I>>(),
   });
 
@@ -160,6 +173,14 @@ export default function streamie<I, R>(
     internalPromise: new Promise<null>((resolve, reject) => {
       eventHandlers.drained.on(() => resolve(null));
       if (settings.haltOnError) eventHandlers.error.on((error) => reject(error));
+      // An aborted streamie never drains, so without this its promise would never
+      // settle. (Settlement is one-shot, so this composes with the rejections above.)
+      // The undefined check (rather than ??) is deliberate: abort errors are
+      // arbitrary external values, so null and other falsey reasons are delivered as
+      // given; only a bare abort() gets the generic error.
+      eventHandlers.halted.on(({ isAborted, abortError }) => {
+        if (isAborted) reject(abortError === undefined ? new Error('Streamie was aborted.') : abortError);
+      });
     }),
     externalPromise: null,
     timeouts: new Set(),
@@ -470,12 +491,18 @@ export default function streamie<I, R>(
     // own. (This leaves the receipt queue empty while the input queue is not, but a
     // halted streamie never dequeues input again, so the alignment is moot.)
     if (queue.receipt !== null) {
-      const error = state.lastError ?? new Error('Streamie was halted.');
+      const error = state.isAborted
+        ? (state.abortError === undefined ? new Error('Streamie was aborted.') : state.abortError)
+        : (state.lastError ?? new Error('Streamie was halted.'));
       while (queue.receipt.length > 0) {
         queue.receipt.shift()?._reject(error);
       }
     }
-    eventHandlers.halted.emit();
+    eventHandlers.halted.emit({
+      isAborted: state.isAborted,
+      abortError: state.abortError,
+      lastError: state.lastError,
+    });
   }
 
 
@@ -589,6 +616,18 @@ export default function streamie<I, R>(
     if (!state.isPaused) requestProcess();
   }
 
+  // Terminates the streamie abnormally through the same halt machinery as
+  // haltOnError, but marks the termination as externally imposed and records the
+  // (arbitrary) error it was imposed with. Idempotent and a no-op once the streamie
+  // is already terminal — unlike push, a termination signal arriving late is not a
+  // caller bug (matching AbortController.abort()).
+  function abort(error?: unknown) {
+    if (state.isHalted || state.isDrained) return;
+    state.isAborted = true;
+    state.abortError = error;
+    setHalted();
+  }
+
   function drain() {
     if (state.shouldDrain) return;
     state.shouldDrain = true;
@@ -606,7 +645,8 @@ export default function streamie<I, R>(
   }
 
   // This registers an input streamie, so that this streamie can be triggered to drain
-  // in the event that all of its input streamies are drained.
+  // (or, when every input aborted, to abort) once all of its input streamies have
+  // terminated.
   function registerInput(inputStreamie: Streamie<any, I>) {
     if (state.isDrained) throw new Error('Cannot register an input on a drained streamie.');
     if (inputStreamie.state.isDrained) throw new Error('Cannot register a drained streamie as an input.');
@@ -615,19 +655,32 @@ export default function streamie<I, R>(
     if (inputStreamies.has(inputStreamie)) return;
     inputStreamies.add(inputStreamie);
 
-    inputStreamie.onDrained(drainIfAllInputsDrained);
-    inputStreamie.onHalted(() => {
+    inputStreamie.onDrained(handleInputTerminated);
+    inputStreamie.onHalted(({ isAborted, abortError }) => {
       inputStreamies.delete(inputStreamie);
-      drainIfAllInputsDrained();
+      if (isAborted) inputAbortErrors.push(abortError);
+      else hasNonAbortHaltedInput = true;
+      handleInputTerminated();
     });
 
     inputStreamie.registerOutput(self);
+  }
 
-    function drainIfAllInputsDrained() {
-      if (Array.from(inputStreamies).every((inputStreamie) => inputStreamie.state.isDrained)) {
-        drain();
-      }
+  function handleInputTerminated() {
+    // Halted inputs are removed from the set on termination, so "all inputs have
+    // terminated" is "every input still present has drained" — vacuously true when
+    // every input halted.
+    if (!Array.from(inputStreamies).every((inputStreamie) => inputStreamie.state.isDrained)) return;
+    // An abort cascades only when every feeder aborted: any input that drained (still
+    // in the set) or halted on its own error means there was a non-aborted data path,
+    // and the termination is an ordinary drain of whatever arrived. This is a
+    // deliberate default — one feeder of several aborting shouldn't kill a consumer
+    // that other feeders completed normally.
+    if (inputStreamies.size > 0 || inputAbortErrors.length === 0 || hasNonAbortHaltedInput) {
+      return drain();
     }
+    const errors = inputAbortErrors.filter((error) => error !== undefined);
+    abort(errors.length > 1 ? new AggregateError(errors, 'All input streamies aborted.') : errors[0]);
   }
 
   function registerOutput(outputStreamie: Streamie<OutputItem, any>) {
@@ -694,6 +747,7 @@ export default function streamie<I, R>(
 
     pause,
     drain,
+    abort,
 
     registerInput,
     registerOutput,
@@ -720,6 +774,9 @@ export default function streamie<I, R>(
       },
       get isHalted() {
         return state.isHalted;
+      },
+      get isAborted() {
+        return state.isAborted;
       },
     },
 
