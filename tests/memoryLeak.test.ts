@@ -99,7 +99,8 @@ describe('streamie memory usage', () => {
         const newStreamie = streamie(async (x: number) => x * 2, {})
         
         const behaviors = newStreamie.map((x) => x * 3, {})
-        .filter(() => true, {});
+        .filter(() => true, {})
+        .sink();
 
         [1, 2, 3].forEach((item) => newStreamie.push(item));
         newStreamie.drain();
@@ -121,7 +122,7 @@ describe('streamie memory usage', () => {
 
   it('should have increasing memory usage when pushing large amount of referenced items', async () => {
     const REST = 50;
-    const checkForLeak = getMemoryLeakTester({ label: 'pushing large amount of referenced items', maxIncreasedCount: 20, restForGC: REST, increaseThreshold: 0.2 });
+    const checkForLeak = getMemoryLeakTester({ label: 'pushing large amount of referenced items', maxIncreasedCount: 5, restForGC: REST, increaseThreshold: 0.05 });
     const items: any[] = [];
     const ITERATIONS = 2_000_000;
     const CHECK_INTERVAL = 10_000;
@@ -132,7 +133,7 @@ describe('streamie memory usage', () => {
     .map(async (x) => x * 3, {})
     .filter(async (x) => x % 2 === 0, {})
     .batch(2)
-    .map(async ([x1, x2]) => {
+    .each(async ([x1, x2]) => {
       const result = (x1 + x2) * 4;
       items.push({ result, x1, x2, memoryWasting: new Array(1000).fill(LOREM) });
       return result;
@@ -143,7 +144,8 @@ describe('streamie memory usage', () => {
       for (let i = 0; i < ITERATIONS; i++) {
         newStreamie.push(1);
         if ((i > 10_000) && ((i % CHECK_INTERVAL) === 0)) {
-          await checkForLeak(150); // will wait 50ms
+          await waitUntil(() => items.length >= (i / 2));
+          await checkForLeak();
           expect(items.length).toEqual((i / 2));
         }
       }
@@ -151,6 +153,8 @@ describe('streamie memory usage', () => {
     catch(err) {
       error = err;
     }
+
+    newStreamie.abort();
     
     expect(error.message).toMatch(/Memory Leak "pushing large amount of referenced items" detected/);
   }, 1000 * 60);
@@ -173,14 +177,15 @@ describe('streamie memory usage', () => {
       amount++;
       return { result, x1, x2, memoryWasting: new Array(1000).fill(LOREM) }
     }, {})
-    .map(async (x) => x.result, {});
+    .each(async (x) => x.result, {});
 
     let error: any;
     try {
       for (let i = 0; i < ITERATIONS; i++) {
         newStreamie.push(1);
         if ((i > 10_000) && ((i % CHECK_INTERVAL) === 0)) {
-          await checkForLeak(150); // will wait 50ms
+          await waitUntil(() => amount >= (i / 2));
+          await checkForLeak();
           expect(amount).toEqual((i / 2));
         }
       }
@@ -199,6 +204,14 @@ describe('streamie memory usage', () => {
 
 function awaitTimeout(timeout: number) {
   return new Promise((resolve) => setTimeout(() => resolve(null), timeout));
+}
+
+async function waitUntil(predicate: () => boolean, timeout = 5_000) {
+  const startedAt = Date.now();
+  while (!predicate()) {
+    if ((Date.now() - startedAt) > timeout) throw new Error('Timed out waiting for pipeline progress.');
+    await awaitTimeout(10);
+  }
 }
 
 type Config = {

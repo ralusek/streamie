@@ -20,9 +20,10 @@ export default function createAsyncIterator<OutputItem>(
   // consumer object satisfying the duck-typed surface the process loop relies on for
   // real downstream streamies (_receive, state.backpressure.input, the lifecycle
   // events). Each call registers a fresh consumer, so concurrent iterators each
-  // observe every item (outputs are broadcast to all consumers), and an iterator only
-  // observes items processed after it was created — start iterating in the same
-  // synchronous block as the pushes, the same contract as attaching a .map.
+  // observe every item (outputs are broadcast to all consumers). If this streamie
+  // already retained outputs while consumer-less, a newly attached iterator receives
+  // that backlog; with existing consumers, outputs are delivered immediately, so an
+  // iterator observes only items not yet delivered to those consumers.
     type PendingPull = {
       resolve: (result: IteratorResult<OutputItem, undefined>) => void;
       reject: (error: unknown) => void;

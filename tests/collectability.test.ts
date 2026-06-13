@@ -32,13 +32,14 @@ describeIfGc('streamie collectability', () => {
       const mapped = source.map(async (x) => [x, x], {});
       const flattened = mapped.flatten();
       const batched = flattened.batch(2);
-      const tail = batched.filter(() => true, {});
+      const filtered = batched.filter(() => true, {});
+      const tail = filtered.sink();
 
       [{ n: 1 }, { n: 2 }, { n: 3 }].forEach((item) => source.push(item));
       source.drain();
       await tail.promise;
 
-      return [source, mapped, flattened, batched, tail].map((stage) => new WeakRef(stage));
+      return [source, mapped, flattened, batched, filtered, tail].map((stage) => new WeakRef(stage));
     })();
 
     expect(await gcUntil(() => stageRefs.every((ref) => ref.deref() === undefined))).toBe(true);
@@ -52,7 +53,7 @@ describeIfGc('streamie collectability', () => {
     const itemRefs = await (async () => {
       const items = [{ n: 1 }, { n: 2 }, { n: 3 }, { n: 4 }];
       const source = streamie(async (x: { n: number }) => ({ doubled: x.n * 2 }), {});
-      const tail = source.batch(2).map(async (pair) => pair.length, {});
+      const tail = source.batch(2).each(async (pair) => pair.length, {});
       stages.push(source, tail);
 
       items.forEach((item) => source.push(item));

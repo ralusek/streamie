@@ -35,7 +35,7 @@ describe('Push receipts', () => {
     const s = streamie(async (input: number) => {
       await delay(5);
       return input;
-    }, { backpressureAt: { input: 3 } });
+    }, { backpressureAt: { input: 3 }, sink: true });
 
     expect(s.push(1).backpressure).toBe(false);
     expect(s.push(2).backpressure).toBe(false);
@@ -97,7 +97,7 @@ describe('Push receipts', () => {
   });
 
   test('a receipt accessed only after settlement still resolves', async () => {
-    const s = streamie((input: number) => input * 2, {});
+    const s = streamie((input: number) => input * 2, { sink: true });
     const receipt = s.push(5);
     s.drain();
     await s.promise;
@@ -145,7 +145,7 @@ describe('Push receipts', () => {
       return input * 10;
     });
     const seen: number[] = [];
-    const tail = next.map((value) => { seen.push(value); });
+    const tail = next.each((value) => { seen.push(value); });
 
     [1, 2, 3].forEach((item) => head.push(item));
     // Let head's synchronous handler run so its outputs are already queued in next's

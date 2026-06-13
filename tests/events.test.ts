@@ -105,7 +105,7 @@ describe('Streamie events', () => {
   const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
   test('onDrained attached after the drain is invoked immediately', async () => {
-    const s = streamie((input: number) => input, {});
+    const s = streamie((input: number) => input, { sink: true });
     s.push(1);
     s.drain();
     await s.promise;
@@ -154,7 +154,7 @@ describe('Streamie events', () => {
     const s = streamie(async (input: number) => {
       await delay(2);
       return input;
-    }, { backpressureAt: { input: 2 } });
+    }, { backpressureAt: { input: 2 }, sink: true });
 
     let releases = 0;
     const unsubscribe: () => void = s.onBackpressureRelease(() => {
@@ -179,7 +179,7 @@ describe('Streamie events', () => {
 
     let onceFirings = 0;
     const handled: number[] = [];
-    s.map((item) => { handled.push(item); });
+    s.each((item) => { handled.push(item); });
 
     for (let item = 1; item <= 6; item++) {
       if (s.push(item).backpressure) {
@@ -214,5 +214,169 @@ describe('Streamie events', () => {
       expect(typeof unsubscribe).toBe('function');
       unsubscribe();
     });
+  });
+});
+
+describe('downstream halt cascade', () => {
+  const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+  test('the halt of the last consumer halts the source with the consumer\'s error', async () => {
+    const s = streamie((input: number) => input, {});
+    const tail = s.map(() => { throw new Error('boom'); });
+
+    s.push(1);
+    await tail.promise.catch(() => {});
+
+    // The source aborts — externally terminated by downstream failure — carrying
+    // the consumer's handler error as the root cause.
+    expect(s.state.isHalted).toBe(true);
+    expect(s.state.isAborted).toBe(true);
+    const rejection = await s.promise.then(() => null, (error) => error);
+    expect(rejection).toBeInstanceOf(StreamieQueueError);
+    expect((rejection as StreamieQueueError<number>).message).toContain('boom');
+  });
+
+  test('cascades only once every consumer has halted', async () => {
+    const s = streamie((input: number) => input, {});
+    const doomed = s.map(() => { throw new Error('boom'); });
+    const keep = s.map((input) => input);
+
+    s.push(1);
+    await doomed.promise.catch(() => {});
+    // A sibling still consumes; the source must survive its other consumer's death.
+    expect(s.state.isHalted).toBe(false);
+
+    keep.abort(new Error('also gone'));
+    await keep.promise.catch(() => {});
+    expect(s.state.isHalted).toBe(true);
+    await expect(s.promise).rejects.toThrow('also gone');
+  });
+
+  test('a consumer draining away is a voluntary detach and does not cascade', async () => {
+    const s = streamie((input: number) => input, {});
+    const tail = s.map((input) => input);
+
+    tail.drain();
+    await tail.promise;
+
+    expect(s.state.isHalted).toBe(false);
+  });
+
+  test('an async iterator breaking away does not cascade', async () => {
+    const s = streamie((input: number) => input, {});
+
+    const iteration = (async () => {
+      for await (const item of s) break;
+    })();
+    s.push(1);
+    await iteration;
+    // Iterator detachment is deferred to a microtask; let it complete.
+    await delay(0);
+
+    expect(s.state.isHalted).toBe(false);
+  });
+
+  test('a mixed history cascades by how the set emptied: final detach by halt', async () => {
+    const s = streamie((input: number) => input, {});
+    const polite = s.map((input) => input);
+    const doomed = s.map((input) => input);
+
+    polite.drain();
+    await polite.promise;
+    expect(s.state.isHalted).toBe(false);
+
+    // The set empties via a failure, so the cascade applies despite the earlier
+    // voluntary departure.
+    doomed.abort(new Error('boom'));
+    await doomed.promise.catch(() => {});
+    expect(s.state.isAborted).toBe(true);
+    await expect(s.promise).rejects.toThrow('boom');
+  });
+
+  test('a mixed history cascades by how the set emptied: final detach voluntary', async () => {
+    const s = streamie((input: number) => input, {});
+    const doomed = s.map((input) => input);
+    const polite = s.map((input) => input);
+
+    doomed.abort(new Error('boom'));
+    await doomed.promise.catch(() => {});
+    expect(s.state.isHalted).toBe(false);
+
+    // The set empties via a drain: the source survives consumer-less, retaining
+    // any outputs for a later consumer.
+    polite.drain();
+    await polite.promise;
+    expect(s.state.isHalted).toBe(false);
+  });
+
+  test('does not echo back when the source itself caused the halt cascade', async () => {
+    const s = streamie((input: number) => input, {});
+    const tail = s.map((input) => input);
+
+    // Aborting the source cascades downstream to the consumer, whose halt then
+    // empties the source's consumer set — but the source is already halted, so the
+    // upstream cascade is a guarded no-op and its own abort error is preserved.
+    const error = new Error('source down');
+    s.abort(error);
+    await tail.promise.catch(() => {});
+
+    await expect(s.promise).rejects.toBe(error);
+    await expect(tail.promise).rejects.toBe(error);
+  });
+
+  test('a deep failure cascades transitively, rejecting every upstream stage', async () => {
+    // No stage inspects beyond its direct consumers: the tail's halt aborts mid
+    // (its consumer set emptied by a failure), which makes mid a halted consumer of
+    // the source, which applies the same rule — induction, not liveness tracking.
+    const source = streamie((input: number) => input, {});
+    const mid = source.map((input) => input);
+    const tail = mid.map(() => { throw new Error('boom'); });
+
+    source.push(1);
+    await tail.promise.catch(() => {});
+
+    expect(mid.state.isAborted).toBe(true);
+    expect(source.state.isAborted).toBe(true);
+    // The root error survives every hop, so a failure deep in a pipeline is
+    // observable (as a rejection) from any stage handle, including the head.
+    const rejection = await source.promise.then(() => null, (error) => error);
+    expect(rejection).toBeInstanceOf(StreamieQueueError);
+    expect((rejection as StreamieQueueError<number>).message).toContain('boom');
+  });
+
+  test('a bare consumer abort cascades as a bare abort with the generic error', async () => {
+    const s = streamie((input: number) => input, {});
+    const tail = s.map((input) => input);
+
+    tail.abort();
+
+    expect(s.state.isAborted).toBe(true);
+    await expect(s.promise).rejects.toThrow('Streamie was aborted.');
+  });
+
+  test('keepAlive: true opts out, retaining outputs and parking on backpressure', async () => {
+    // The hub case: a deliberately long-lived source whose ephemeral consumers
+    // come, fail, and are replaced. It survives total consumer failure the way it
+    // survives having no consumers at all — retaining outputs up to its threshold,
+    // with backpressure stalling everything behind it.
+    const s = streamie((input: number) => input, { backpressureAt: 2, keepAlive: true });
+    const tail = s.map(() => { throw new Error('boom'); });
+
+    s.push(1);
+    await tail.promise.catch(() => {});
+    for (let item = 2; item <= 10; item++) s.push(item);
+    await delay(10);
+
+    expect(s.state.isHalted).toBe(false);
+    expect(s.state.count.queued.output).toBe(2);
+    expect(s.state.backpressure.input).toBe(true);
+
+    // Still healthy: a replacement consumer attaches and receives the retained
+    // backlog plus the remaining items.
+    const handled: number[] = [];
+    const replacement = s.each((item) => { handled.push(item); });
+    s.drain();
+    await replacement.promise;
+    expect(handled).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10]);
   });
 });

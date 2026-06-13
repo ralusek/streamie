@@ -11,7 +11,7 @@ describe('Streamie', () => {
       const a = streamie((value: number, { push, index }) => {
         const x = expectsNumber(value);
         return x;
-      }, { seed: 1 });
+      }, { seed: 1, sink: true });
 
       a.drain();
 
@@ -22,7 +22,7 @@ describe('Streamie', () => {
       const a = streamie((value: number, { push, index }) => value, {});
 
       // A batched stage receives the batch as an array
-      const b = a.batch(2).map((values, { push, index }) => {
+      const b = a.batch(2).each((values, { push, index }) => {
         return 'Hello' + values[0] + values[1];
       }, {});
 
@@ -30,7 +30,7 @@ describe('Streamie', () => {
       const c = a.batch(2)
       .map((values, { index }) => values.map((value) => 'Hello' + index + value), {})
       .flatten()
-      .map((value) => {
+      .each((value) => {
         const greeting: string = value; // Ensure elements are inferred as string
         return greeting;
       }, {});
@@ -49,7 +49,7 @@ describe('Streamie', () => {
 
       const result: number[] = [];
       const filteredStreamie = initialStreamie.filter(async (output) => output % 2 === 0, {})
-      .map((value) => result.push(value), {});
+      .each((value) => result.push(value), {});
       filteredStreamie.onDrained(() => {
         filteredStreamieWasDrained = true;
         expect(result).toEqual([6, 12]);

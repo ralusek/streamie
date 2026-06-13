@@ -52,7 +52,8 @@ describe('Streamie', () => {
           .filter(async () => {
             observed.filter.push(requestId());
             return true;
-          });
+          })
+          .sink();
 
         [1, 2, 3, 4].forEach((item) => source.push(item));
         source.drain();
@@ -76,7 +77,7 @@ describe('Streamie', () => {
           // with each other rather than in the order they started.
           await new Promise(resolve => setTimeout(resolve, (4 - x) * 10));
           observed.push({ item: x, before, after: als.getStore()?.requestId });
-        }, { concurrency: 3 });
+        }, { concurrency: 3, sink: true });
 
         [1, 2, 3].forEach((item) => s.push(item));
         s.drain();
@@ -100,7 +101,7 @@ describe('Streamie', () => {
           if (page < 2) push(page + 1);
           else drain();
           return page;
-        }, { seed: 0 });
+        }, { seed: 0, sink: true });
 
         await paginator.promise;
       });
@@ -120,7 +121,7 @@ describe('Streamie', () => {
       const s = streamie(async (item: string) => {
         observed.push({ item, requestId: als.getStore()?.requestId });
         await new Promise(resolve => setTimeout(resolve, 10));
-      }, { concurrency: 1 });
+      }, { concurrency: 1, sink: true });
 
       als.run({ requestId: 'pusher-1' }, () => s.push('item1'));
       als.run({ requestId: 'pusher-2' }, () => s.push('item2'));

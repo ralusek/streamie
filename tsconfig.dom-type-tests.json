@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "strict": true,
+    // The point of this config: the rest of the project (and the main type tests)
+    // compile without DOM on purpose, so this is the one place that verifies the
+    // bridges' structural stream types accept the real lib.dom classes.
+    "lib": ["ES2021", "DOM"]
+  },
+  "include": ["tests/streams-dom.type-test.ts"]
+}

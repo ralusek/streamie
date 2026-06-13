@@ -21,7 +21,7 @@ describe('Handles drains as expected', () => {
       return input * 3;
     }, {})
     
-    const map = streamC.map((output) => results.C.push(output), {});
+    const map = streamC.each((output) => results.C.push(output), {});
 
     streamA.registerOutput(streamB);
     streamB.registerOutput(streamC);

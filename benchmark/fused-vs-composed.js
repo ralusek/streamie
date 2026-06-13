@@ -68,11 +68,13 @@ async function run({ shape, n, handler, workConfig }) {
 
   let count = 0;
   let sum = 0;
+  // sink: true — a consumer-less terminal stage otherwise retains its outputs and
+  // parks on output backpressure rather than draining.
   const sink = tail.map((x) => {
     count++;
     sum += x;
     return x;
-  }, {});
+  }, { sink: true });
 
   const heapBaseline = process.memoryUsage().heapUsed;
   let heapPeak = heapBaseline;

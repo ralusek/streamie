@@ -108,10 +108,16 @@ describe('Async iteration', () => {
 
     expect(results).toEqual([1, 2]);
 
-    // With the iterator detached, the source continues processing and drains normally.
-    await s.promise;
+    // With the iterator detached the source is unaffected — it keeps processing —
+    // but with no consumer left its outputs are retained rather than discarded, so
+    // it does not drain: producing into the void must be declared (sink: true),
+    // never ambient. The retained outputs would be delivered to a later consumer.
+    await delay(10);
     expect(handled).toBe(6);
-    expect(s.state.isDrained).toBe(true);
+    expect(s.state.isDrained).toBe(false);
+    // Of the four unconsumed items, one may already have been handed into the
+    // iterator's single-item buffer before the break (and discarded with it).
+    expect(s.state.count.queued.output).toBeGreaterThanOrEqual(3);
   });
 
   test('Receives items pushed while iteration is in flight', async () => {
@@ -133,7 +139,7 @@ describe('Async iteration', () => {
   });
 
   test('Iterating an already-drained streamie completes immediately', async () => {
-    const s = streamie(async (input: number) => input, {});
+    const s = streamie(async (input: number) => input, { sink: true });
     [1, 2].forEach((item) => s.push(item));
     s.drain();
     await s.promise;

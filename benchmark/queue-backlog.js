@@ -37,11 +37,13 @@ function buildPipeline() {
     .map((x) => x + 1, {})
     .filter((x) => (x & 1) === 0, {})
     .batch(10)
+    // sink: true — a consumer-less terminal stage otherwise retains its outputs and
+    // parks on output backpressure rather than draining.
     .map((batch) => {
       count += batch.length;
       for (let i = 0; i < batch.length; i++) sum += batch[i];
       return batch.length;
-    }, {});
+    }, { sink: true });
   return { head, tail, stats: () => ({ count, sum }) };
 }
 

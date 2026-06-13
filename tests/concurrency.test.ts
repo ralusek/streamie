@@ -24,7 +24,7 @@ describe('Streamie', () => {
         maxActive = Math.max(maxActive, active.length);
         await new Promise(resolve => setTimeout(resolve, timeout));
         active.splice(active.indexOf(id), 1); // Remove the task from the queue.
-      }, { concurrency: 3 });
+      }, { concurrency: 3, sink: true });
 
       const t0 = Date.now();
 

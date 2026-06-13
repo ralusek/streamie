@@ -11,7 +11,7 @@ describe('Multiple Inputs and Outputs', () => {
     streamB.registerInput(streamA2);
 
     const result: number[] = [];
-    const finalStreamie = streamB.map((output) => result.push(output), {});
+    const finalStreamie = streamB.each((output) => result.push(output), {});
     
     [1, 2].forEach((item) => streamA1.push(item));
     [3, 4].forEach((item) => streamA2.push(item));
@@ -46,8 +46,8 @@ describe('Multiple Inputs and Outputs', () => {
 
     let result1: number[] = [];
     let result2: number[] = [];
-    const finalStreamie1 = streamC1.map((output) => result1.push(output), {});
-    const finalStreamie2 = streamC2.map((output) => result2.push(output), {});
+    const finalStreamie1 = streamC1.each((output) => result1.push(output), {});
+    const finalStreamie2 = streamC2.each((output) => result2.push(output), {});
 
     [1, 2, 3, 4].forEach((item) => streamB.push(item));
     expect(streamB.state.isDrained).toBe(false);

@@ -17,8 +17,11 @@ describe('Streamie', () => {
     test('Input and Output backpressure is correctly applied', async () => {
       // Stream A just passes them right through
       const streamA = streamie(async (input: ExternallyResolvablePromise) => input, { backpressureAt: 2});
-      // Stream B awaits the items until they're resolved.
-      const streamB = streamie(async (input: ExternallyResolvablePromise) => input.promise, { backpressureAt: 2 });
+      // Stream B awaits the items until they're resolved. It is the pipeline's
+      // terminal stage, so it is a sink: without that, its outputs would be retained
+      // (a consumer-less streamie no longer discards them) and its own output
+      // backpressure would distort the input-side dynamics this test measures.
+      const streamB = streamie(async (input: ExternallyResolvablePromise) => input.promise, { backpressureAt: 2, sink: true });
       streamA.registerOutput(streamB);
 
 

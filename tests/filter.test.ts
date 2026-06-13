@@ -9,7 +9,7 @@ describe('Streamie', () => {
 
       const result: number[] = [];
       const filteredStreamie = initialStreamie.filter((output) => output % 2 === 0, {})
-      .map((value) => result.push(value), {});
+      .each((value) => result.push(value), {});
       filteredStreamie.onDrained(() => {
         filteredStreamieWasDrained = true;
         expect(result).toEqual([6, 12]);
@@ -32,7 +32,7 @@ describe('Streamie', () => {
       .filter((outputs) => {
         return outputs.every(output => output % 2 === 0);
       }, {})
-      .map((values) => {
+      .each((values) => {
         result.push(values);
       }, {});
       filteredStreamie.onDrained(() => {

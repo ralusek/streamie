@@ -19,7 +19,7 @@ describe('Streamie', () => {
       }, {});
 
       const result: number[] = [];
-      const final = sums.map((value) => {
+      const final = sums.each((value) => {
         // value should be number
         result.push(value);
       }, {});
@@ -50,7 +50,7 @@ describe('Streamie', () => {
       .flatten();
 
       const result: string[] = [];
-      const b = flattened.map((value) => {
+      const b = flattened.each((value) => {
         // value should be string
         result.push(value);
       }, {});
@@ -84,7 +84,7 @@ describe('Streamie', () => {
       }, {});
 
       const result: string[] = [];
-      const final = b.map((value) => {
+      const final = b.each((value) => {
         // value should be string
         result.push(value);
       }, {});
@@ -116,7 +116,7 @@ describe('Streamie', () => {
         return sum % 2 === 0; // Keep even sums
       }, {});
 
-      const final = filtered.map((value) => result.push(value), {});
+      const final = filtered.each((value) => result.push(value), {});
 
       a.push(1);
       a.push(2); // sum = 3
@@ -140,7 +140,7 @@ describe('Streamie', () => {
 
       const b = a.map((value) => value * 2, {})
        .filter((value) => value % 3 === 0, {})
-       .map((value) => {
+       .each((value) => {
         result.push(value);
         return value;
        }, {});
@@ -165,7 +165,7 @@ describe('Streamie', () => {
 
       const result: number[] = [];
 
-      const b = a.map((value) => result.push(value), {});
+      const b = a.each((value) => result.push(value), {});
 
       [1, 2, 3, 4, 5].forEach((item) => a.push(item));
       a.drain();
@@ -213,7 +213,7 @@ describe('Streamie', () => {
 
       const result: number[] = [];
 
-      const b = a.map((value) => result.push(value), {});
+      const b = a.each((value) => result.push(value), {});
 
       [1, 2, 3, 4, 5].forEach((item) => a.push(item));
       a.drain();
@@ -234,7 +234,7 @@ describe('Streamie', () => {
 
       const result: number[] = [];
 
-      const b = a.map((value) => result.push(value), {});
+      const b = a.each((value) => result.push(value), {});
 
       [1, 2, 3, 4].forEach((item) => a.push(item));
       a.drain();
@@ -254,7 +254,7 @@ describe('Streamie', () => {
       }, { haltOnError: true, propagateErrors: true });
 
       const result: number[] = [];
-      const b = a.map((value) => result.push(value), {});
+      const b = a.each((value) => result.push(value), {});
 
       [1, 2, 3, 4, 5].forEach((item) => a.push(item));
       a.drain();
@@ -273,7 +273,7 @@ describe('Streamie', () => {
       }, { haltOnError: false, propagateErrors: false });
 
       const result: number[] = [];
-      const b = a.map((value) => result.push(value), { haltOnError: true });
+      const b = a.each((value) => result.push(value), { haltOnError: true });
 
       [1, 2, 3, 4, 5].forEach((item) => a.push(item));
       a.drain();
@@ -292,7 +292,7 @@ describe('Streamie', () => {
       }, { seed: 0 });
 
       const result: number[] = [];
-      const b = a.map((value) => result.push(value), {});
+      const b = a.each((value) => result.push(value), {});
 
       a.drain(); // because drained in synchronous flow, seed won't be used
       await b.promise;
@@ -307,7 +307,7 @@ describe('Streamie', () => {
       }, {});
 
       const result: number[] = [];
-      const b = a.flatten().map((value) => result.push(value), {});
+      const b = a.flatten().each((value) => result.push(value), {});
 
       a.push(1);
       a.push(2);
@@ -326,7 +326,7 @@ describe('Streamie', () => {
       }, {});
 
       const result: number[] = [];
-      a.map((value) => result.push(value), {});
+      a.each((value) => result.push(value), {});
 
       [1, 2, 3].forEach((item) => a.push(item));
       a.pause();
@@ -354,7 +354,7 @@ describe('Streamie', () => {
       expect(() => a.push(3)).toThrow('Cannot push to a draining streamie.');
 
       const result: number[] = [];
-      a.map((value) => result.push(value), {});
+      a.each((value) => result.push(value), {});
       await a.promise;
 
       expect(result).toEqual([2, 4]);
@@ -370,7 +370,7 @@ describe('Streamie', () => {
       }, { haltOnError: true });
 
       const result: number[] = [];
-      a.map((value) => result.push(value), {});
+      a.each((value) => result.push(value), {});
 
       [1, 2, 3].forEach((item) => a.push(item));
       a.drain();
@@ -387,7 +387,7 @@ describe('Streamie', () => {
       }, { concurrency: 2 });
 
       const result: number[] = [];
-      a.map((value) => result.push(value), {});
+      a.each((value) => result.push(value), {});
 
       [1, 2, 3, 4].forEach((item) => a.push(item));
       a.drain();

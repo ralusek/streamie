@@ -70,7 +70,7 @@ describe('Streamie', () => {
         return result;
       }, { concurrency: 3 })
       .batch(5)
-      .map(async (articles) => {
+      .each(async (articles) => {
         runningTracker.mapB.push(++currentlyRunning.mapB);
         batchMapResults.push(articles);
         const lastPageArticles = TOTAL_ARTICLES % 5;

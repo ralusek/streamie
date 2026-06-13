@@ -1,4 +1,5 @@
-import streamie from '../dist';
+import streamie, { fromReadableStream, toWritableStream } from '../dist';
+import type { ReadableStreamLike, WritableStreamLike } from '../dist';
 import type { Streamie, StreamieHaltPayload } from '../dist/types';
 import type { StreamieQueueError } from '../dist/error';
 
@@ -183,6 +184,9 @@ streamie((value: number) => true, { isFilter: true });
 // @ts-expect-error maxBatchWait belongs to the batch combinator's config
 streamie((value: number) => value, { maxBatchWait: 100 });
 
+// The yield budget, by contrast, is public config.
+streamie((value: number) => value, { yieldAfter: 50 });
+
 // ---------------------------------------------------------------------------
 // Tools
 // ---------------------------------------------------------------------------
@@ -271,6 +275,44 @@ source1.onHalted((payload) => {
 
 // Zero-argument handlers remain assignable to events that carry payloads.
 source1.onHalted(() => {});
+
+// Sinks: each is a terminal map (handler inference unchanged), sink() appends an
+// identity terminal stage, and sink: true is plain config — as is keepAlive, the
+// opt-out from the downstream halt cascade.
+const stringifier = streamie((value: number) => String(value), {});
+const eached = stringifier.each((value) => value.length);
+export type Each_Streamie = Expect<Equal<typeof eached, Streamie<string, number>>>;
+const sunk = stringifier.map((value) => value.length).sink();
+export type Sink_Streamie = Expect<Equal<typeof sunk, Streamie<number, number>>>;
+streamie((value: number) => value, { sink: true });
+streamie((value: number) => value, { keepAlive: true });
+
+// ---------------------------------------------------------------------------
+// Web stream bridges
+// ---------------------------------------------------------------------------
+
+declare const numberReadable: ReadableStreamLike<number>;
+declare const numberWritable: WritableStreamLike<number>;
+declare const stringWritable: WritableStreamLike<string>;
+
+const bridged = fromReadableStream(numberReadable);
+
+// The bridge accepts preventCancel alongside its core config subset.
+fromReadableStream(numberReadable, { backpressureAt: 8, preventCancel: true });
+
+export type Bridged_Streamie = Expect<
+  Equal<typeof bridged, Streamie<number, number>>
+>;
+export type Bridged_NotAny = Expect<NotAny<OutputOf<typeof bridged>>>;
+
+const piped = toWritableStream(bridged, numberWritable);
+
+export type Piped_ResolvesVoid = Expect<Equal<typeof piped, Promise<void>>>;
+
+// The sink's chunk type must match the streamie's output; O is inferred from the
+// streamie alone, never widened by the sink.
+// @ts-expect-error a Streamie<number, number> cannot pipe into a string sink
+toWritableStream(bridged, stringWritable);
 
 // Prevent accidental widening to any in the core inference path.
 export type _NoUnexpectedAny = [

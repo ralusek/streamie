@@ -83,7 +83,7 @@ describe('abort', () => {
   });
 
   test('abort is idempotent and a no-op after drain', async () => {
-    const s = streamie((input: number) => input, {});
+    const s = streamie((input: number) => input, { sink: true });
     s.push(1);
     s.drain();
     await s.promise;
@@ -204,7 +204,7 @@ describe('abort', () => {
     const a = streamie((input: number) => input, {});
     const b = streamie((input: number) => input, {});
     const handled: number[] = [];
-    const consumer = streamie((input: number) => { handled.push(input); }, {});
+    const consumer = streamie((input: number) => { handled.push(input); }, { sink: true });
     consumer.registerInput(a);
     consumer.registerInput(b);
 

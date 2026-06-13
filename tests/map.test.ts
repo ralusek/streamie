@@ -8,7 +8,7 @@ describe('Streamie', () => {
       const initialStreamie = streamie(async (input: number) => input * 2, {});
 
       const result: number[] = [];
-      const mappedStreamie = initialStreamie.map((output) => result.push(output + 1), {});
+      const mappedStreamie = initialStreamie.each((output) => result.push(output + 1), {});
       mappedStreamie.onDrained(() => {
         mappedStreamieWasDrained = true;
         expect(result).toEqual([3, 5, 7]);
@@ -36,7 +36,7 @@ describe('Streamie', () => {
       const result: number[] = [];
       const mappedStreamie = doubledBatches
       .batch(2)
-      .map((outputs) => {
+      .each((outputs) => {
         outputs.forEach((pair, index) => {
           const expectation = expectationsByBatch[index];
           expect(pair).toEqual(expectation);
@@ -71,7 +71,7 @@ describe('Streamie', () => {
       let i = 0;
       const mappedStreamie = doubled
       .batch(3)
-      .map((outputs) => {
+      .each((outputs) => {
         const expectation = expectationsByBatch[i++];
         expect(outputs).toEqual(expectation);
         result.push(...outputs.map(output => output + 1));
@@ -107,7 +107,7 @@ describe('Streamie', () => {
         return output * 2;
       }, {});
 
-      const final = filteredStreamie.map((final) => {
+      const final = filteredStreamie.each((final) => {
         result.push(final);
       }, {});
 

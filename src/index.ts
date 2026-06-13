@@ -20,6 +20,12 @@ import RingBuffer from './utils/dataStructures/ringBuffer';
 import createAsyncIterator from './utils/asyncIterator';
 import createEventHandlers, { event, type Unsubscribe } from './utils/events';
 import PushReceipt from './utils/pushReceipt';
+import yieldToMacrotask from './utils/yieldToMacrotask';
+import currentSliceAge from './utils/eventLoopSlice';
+
+// Stream bridges
+import pumpReadableStream from './utils/streams/readable';
+import type { ReadableStreamLike, ReadableStreamChunkOf } from './utils/streams';
 
 type TimeoutId = ReturnType<typeof setTimeout>;
 
@@ -73,6 +79,9 @@ export default function streamie<I, R>(
     haltOnError: config.haltOnError !== false,
     flatten: internalConfig.flatten === true,
     propagateErrors: config.propagateErrors !== false,
+    yieldAfter: config.yieldAfter ?? 100,
+    isSink: config.sink === true,
+    keepAlive: config.keepAlive === true,
   };
 
   const state: {
@@ -134,6 +143,13 @@ export default function streamie<I, R>(
   const inputAbortErrors: unknown[] = [];
   let hasNonAbortHaltedInput = false;
 
+  // The most recent Date.now() observed by the process loop (set once per work
+  // iteration in checkCanProcessInput). The yield check reuses it so that yielding
+  // costs a comparison, not a second clock read per item. Staleness only delays a
+  // yield by one iteration: with the check running after each iteration, starvation
+  // stays bounded by yieldAfter plus about two handler invocations.
+  let lastClockAt = Date.now();
+
   const eventHandlers = createEventHandlers({
     // Fired whenever a dequeue takes the input queue back below its backpressure
     // threshold — the signal cooperative producers and upstream streamies resume on.
@@ -169,6 +185,9 @@ export default function streamie<I, R>(
     timeouts: Set<TimeoutId>;
 
     processScheduled: boolean;
+
+    // Whether a macrotask yield is currently pending (see scheduleYield).
+    yieldScheduled: boolean;
   } = {
     internalPromise: new Promise<null>((resolve, reject) => {
       eventHandlers.drained.on(() => resolve(null));
@@ -185,6 +204,7 @@ export default function streamie<I, R>(
     externalPromise: null,
     timeouts: new Set(),
     processScheduled: false,
+    yieldScheduled: false,
   };
 
   // We catch the internal promise so that it doesn't throw an unhandled rejection in the event of an error.
@@ -198,6 +218,11 @@ export default function streamie<I, R>(
   // and flatten behaviors. May throw (e.g. flattening a non-array); callers are
   // responsible for converting that into a queue error.
   function settleSuccess(handlerInput: I | I[], handlerOutput: unknown) {
+    // A sink's handler is the endpoint: its outputs go nowhere by declaration, and
+    // consumers can never be registered on it, so the output queue would be pure
+    // overhead — skip it entirely. (Receipts still resolve with the handler output;
+    // they were settled by the caller, not by this queue.)
+    if (settings.isSink) return;
     // If the handler is a filter, the return value is a boolean, and if the return value is false, we
     // do not push to the output queue. If the output is truthy, we pass the input through to
     // the output queue.
@@ -362,7 +387,10 @@ export default function streamie<I, R>(
     ) return { canProcess: false };
 
 
-    const timeSinceLastHandled = state.lastHandledAt && Date.now() - state.lastHandledAt;
+    // The single clock read for this process iteration; the yield check in
+    // requestProcess reuses it via lastClockAt rather than reading again.
+    lastClockAt = Date.now();
+    const timeSinceLastHandled = state.lastHandledAt && lastClockAt - state.lastHandledAt;
 
     // This top level condition establishes a normal condition under which we would not handle
     // the items, as there aren't enough to justify a batch. However, we will handle them
@@ -393,6 +421,16 @@ export default function streamie<I, R>(
     if (
       (state.isPaused || state.isHalted || state.isDrained) ||
       (queue.output.success.length === 0) ||
+      // No consumers: outputs are retained, not discarded — producing into the void
+      // must be declared (sink: true), never ambient. The retained queue engages
+      // output backpressure at backpressureAt.output, which stalls this streamie and,
+      // through its input queue, everything upstream. The outputs are delivered if a
+      // consumer attaches later. This state means no consumer has attached *yet*, or
+      // they detached voluntarily: consumers lost to failure instead halt this
+      // streamie outright (see handleConsumerHalted), unless keepAlive opted out.
+      // (A sink never reaches here: its outputs skip the queue, so length above is
+      // always 0.)
+      (outputStreamies.size === 0) ||
       // TODO should allow different strategies, but for now we will say that if any consumer
       // is backpressured, no other outputStreamies will be pushed to, as this could allow a queue
       // to grow indefinitely.
@@ -402,6 +440,13 @@ export default function streamie<I, R>(
   }
 
   function requestProcess() {
+    // A pending yield is a deliberate pause: re-entering here (from pushes, event
+    // subscriptions, promise continuations) before the macrotask fires would erode
+    // the yield one item at a time, so processing requests during the window are
+    // simply absorbed — the yield's own continuation resumes them. Meanwhile the
+    // input queue keeps accepting items, so backpressure builds and cooperative
+    // producers park exactly as if processing were merely busy.
+    if (ref.yieldScheduled) return;
     let activity = true;
     while (activity) {
       activity = false;
@@ -435,9 +480,35 @@ export default function streamie<I, R>(
           processOutput();
         }
       }
+
+      // Time-based yield, checked only after an iteration that did work: handlers
+      // that settle without real I/O or timers (synchronous, or async over
+      // already-settled promises) chain processing through microtasks indefinitely,
+      // and a starved event loop cannot run timers — including any timer that would
+      // have called abort(). The age of the current event-loop slice (time since
+      // the last macrotask boundary; see the util) is the starvation actually in
+      // progress, so a healthy turning loop never trips this. The budget bounds
+      // starvation to roughly yieldAfter plus a single handler invocation, which is
+      // the strongest guarantee available: nothing can preempt one synchronous
+      // handler.
+      if (activity && (currentSliceAge(lastClockAt) >= settings.yieldAfter)) {
+        return scheduleYield();
+      }
     }
 
     if (state.isDrained) handleOnDrained();
+  }
+
+  // Defers the next processing pass to a macrotask, letting the event loop turn
+  // over (timers, I/O) before work resumes — which also ends the current event-loop
+  // slice, so resumed processing measures against a fresh clock.
+  function scheduleYield() {
+    if (ref.yieldScheduled) return;
+    ref.yieldScheduled = true;
+    yieldToMacrotask(() => {
+      ref.yieldScheduled = false;
+      requestProcess();
+    });
   }
 
   // Defers processing to a microtask. External pushes use this rather than processing
@@ -545,6 +616,26 @@ export default function streamie<I, R>(
     registerOutput(nextStreamie);
 
     return nextStreamie;
+  }
+
+  // A .map that is also a terminal stage: the handler is the endpoint (a forEach),
+  // so its outputs are discarded as they settle and consumers cannot be registered.
+  // This is how a pipeline of side effects declares "the end of the line is here" —
+  // without it, the final stage would retain its outputs and stall on backpressure.
+  function each<NR>(
+    handler: Handler<OutputItem, NR>,
+    config: Config = {},
+  ): Streamie<OutputItem, Awaited<NR>> {
+    return map(handler, { ...config, sink: true });
+  }
+
+  // An explicit terminal stage with nothing left to do: an identity .each. A
+  // pipeline of pure transforms ends with .sink() to declare that reaching the end
+  // is the point, letting the chain drain rather than retain its final outputs.
+  function sink(config: Config = {}): Streamie<OutputItem, OutputItem> {
+    // The cast collapses Awaited<OutputItem> to OutputItem: outputs are already
+    // settled values, but TS cannot reduce Awaited over the unresolved generic.
+    return each((item: OutputItem) => item, config) as Streamie<OutputItem, OutputItem>;
   }
 
   // NOTE: filtering (dropping items) is implemented by the core process loop, not here.
@@ -684,6 +775,10 @@ export default function streamie<I, R>(
   }
 
   function registerOutput(outputStreamie: Streamie<OutputItem, any>) {
+    // A sink is a declared endpoint: its outputs are discarded as they settle (they
+    // never reach an output queue), so a consumer of one could only ever observe
+    // nothing. Refusing the registration outright beats silently delivering nothing.
+    if (settings.isSink) throw new Error('Cannot register an output on a sink streamie.');
     if (state.isDrained) throw new Error('Cannot register an output on a drained streamie.');
     if (outputStreamie.state.isDrained) throw new Error('Cannot register a drained streamie as an output.');
     if (state.isHalted) throw new Error('Cannot register an output on a halted streamie.');
@@ -701,12 +796,51 @@ export default function streamie<I, R>(
       while (consumerSubscriptions.length > 0) consumerSubscriptions.pop()!();
     };
     consumerSubscriptions.push(outputStreamie.onBackpressureRelease(() => requestProcess()));
-    consumerSubscriptions.push(outputStreamie.onHalted(removeOutput));
+    consumerSubscriptions.push(outputStreamie.onHalted((haltPayload) => {
+      removeOutput();
+      handleConsumerHalted(haltPayload);
+    }));
     // Removal on draining would be a strange scenario, but it's not disallowed: if a
     // streamie with inputs is set to drain, we simply remove it as an output.
     consumerSubscriptions.push(outputStreamie.onDraining(removeOutput));
 
     outputStreamie.registerInput(self);
+
+    // A streamie with no consumers retains its outputs (see checkCanProcessOutput),
+    // so a late-attaching consumer may have a backlog waiting; nudge the loop to
+    // flush it. Deferred to a microtask so a registration mid-chain-construction
+    // can't deliver outputs past consumers attached later in the same block.
+    scheduleProcess();
+  }
+
+  // Invoked when a consumer halts (after its removal from outputStreamies). When
+  // that halt emptied the consumer set, every path this streamie's outputs could
+  // take now ends in a failure, so it halts too. This is how downstream failure
+  // propagates upstream — the inverse of the abort cascade — and it is transitive
+  // by induction: aborting here makes *this* streamie a halted consumer of its own
+  // inputs, which apply the same rule, all the way up to the source (releasing, for
+  // a stream bridge, the underlying reader). The emptied-by-a-halt requirement is
+  // load-bearing in both directions: one consumer failing never kills a source a
+  // sibling is still consuming, and voluntary detaches (a drain, an async iterator
+  // break) never trigger this — those leave a healthy streamie retaining its
+  // outputs for any later consumer.
+  function handleConsumerHalted(haltPayload: StreamieHaltPayload<OutputItem>) {
+    if (outputStreamies.size > 0) return;
+    // The opt-out for deliberately long-lived sources (hubs) whose ephemeral
+    // consumers come, fail, and are replaced: retain outputs and park on
+    // backpressure instead, exactly as if the consumers had detached voluntarily.
+    if (settings.keepAlive) return;
+    // Already terminal: the consumer's halt may be the echo of this streamie's own
+    // abort cascading downstream. (A merely *draining* streamie is not exempt: its
+    // remaining outputs now have nowhere to go, so without the abort its promise
+    // would hang rather than ever resolve.)
+    if (state.isHalted || state.isDrained) return;
+    // abort() rather than a bespoke halt: externally imposed termination is exactly
+    // what abort models, with the consumer's terminating error — its own abort
+    // error, or the handler error that halted it — as the cause. Upstream stages
+    // thus report isAborted: true, to be read as "halted from outside its own
+    // handlers", while the root error is preserved through every hop.
+    abort(haltPayload.isAborted ? haltPayload.abortError : haltPayload.lastError ?? undefined);
   }
 
   // Private functions
@@ -741,9 +875,11 @@ export default function streamie<I, R>(
   const self = {
     push,
     map,
+    each,
     filter,
     batch,
     flatten,
+    sink,
 
     pause,
     drain,
@@ -818,3 +954,35 @@ export default function streamie<I, R>(
 
   return self;
 }
+
+// WHATWG (web) stream bridges. The Streamie-suffixed names matter: the bare
+// Readable/Writable names belong to Node's stream classes, whose bridges live apart
+// so that node:stream never touches this entry.
+
+// Creates a streamie fed by a WHATWG ReadableStream. Items flow under backpressure
+// (the stream is only pulled as fast as the pipeline absorbs items, bounded by
+// backpressureAt); the stream ending drains the streamie, the stream erroring aborts
+// it with that error, and the streamie terminating cancels the stream's reader.
+// Because downstream failure cascades upstream through the core (a consumer halt
+// that leaves a streamie consumer-less aborts it, transitively), a failure at *any*
+// depth in the pipeline reaches the bridge and cancels the reader with the root
+// error — the source-cancellation contract of pipeTo across a pipeThrough chain.
+// preventCancel: true (pipeTo's option) keeps the stream itself out of it: the
+// bridge streamie still halts, but the reader lock is released without cancelling,
+// leaving the stream readable by another consumer.
+// The chunk type is recovered via ReadableStreamChunkOf (see its comment for why
+// inference can't run through ReadableStreamLike<T> directly), and the output is its
+// Awaited because handler results are awaited: a stream of thenables emits their
+// settled values (for any ordinary chunk type both are just the chunk type).
+export function fromReadableStream<S extends ReadableStreamLike<unknown>>(
+  stream: S,
+  config: Pick<Config, 'backpressureAt' | 'yieldAfter'> & { preventCancel?: boolean } = {},
+): Streamie<ReadableStreamChunkOf<S>, Awaited<ReadableStreamChunkOf<S>>> {
+  type T = ReadableStreamChunkOf<S>;
+  const bridged = streamie((input: T) => input, config);
+  pumpReadableStream(stream as ReadableStreamLike<T>, bridged, { preventCancel: config.preventCancel });
+  return bridged;
+}
+
+export { default as toWritableStream } from './utils/streams/writable';
+export type { ReadableStreamLike, WritableStreamLike } from './utils/streams';

@@ -11,7 +11,7 @@
     "build": "tsc",
     "bench": "node --expose-gc benchmark/fused-vs-composed.js",
     "test": "node --max-old-space-size=8192 ./node_modules/.bin/jest",
-    "test:types": "tsc -p tsconfig.type-tests.json --noEmit",
+    "test:types": "tsc -p tsconfig.type-tests.json --noEmit && tsc -p tsconfig.dom-type-tests.json --noEmit",
     "test:memory": "node --expose-gc --max-old-space-size=8192 ./node_modules/.bin/jest --config jest.memory.config.js --runInBand"
   },
   "keywords": [],

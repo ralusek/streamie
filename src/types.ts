@@ -13,6 +13,31 @@ export type Config = {
   concurrency?: number;
   haltOnError?: boolean;
   propagateErrors?: boolean;
+  // Declares this streamie a terminal stage: its handler is the endpoint, so outputs
+  // are discarded as they settle (skipping the output queue entirely) instead of
+  // being held for consumers, and registering a consumer throws. backpressureAt.output
+  // has no effect on a sink — there is no output queue. Without this, a streamie with
+  // no consumers retains its outputs — bounded by backpressureAt.output — and stalls,
+  // propagating backpressure upstream: producing into the void must be asked for,
+  // never ambient. The .each and .sink combinators are the usual ways to get a sink;
+  // this flag is their lower-level form.
+  sink?: boolean;
+  // By default, a consumer halt that leaves a streamie with no consumers at all
+  // halts (aborts) it too: every path its outputs could take ended in failure, so
+  // there is nothing left to produce for, and the failure propagates upstream stage
+  // by stage — rejecting every stage's promise with the root error and releasing
+  // any bridged source. Voluntary detaches (a drain, an async iterator break) never
+  // trigger this, and a surviving sibling consumer prevents it. keepAlive opts this
+  // streamie out, for a deliberately long-lived source (a hub) whose ephemeral
+  // consumers come, fail, and are replaced: it instead retains its outputs and
+  // parks on backpressure, exactly as if the consumers had detached voluntarily.
+  keepAlive?: boolean;
+  // Escape hatch for purely synchronous pipelines (handlers that settle without
+  // real I/O or timers, fed by a source that never runs dry), which could otherwise
+  // monopolize the event loop: processing yields via a macrotask after running
+  // continuously this long (milliseconds; default 100). Pipelines doing real
+  // asynchronous work yield naturally and never hit this.
+  yieldAfter?: number;
 };
 
 export type BatchConfig = Config & {
@@ -96,6 +121,11 @@ export type Streamie<I, O> = {
 
   map: <R>(handler: Handler<O, R>, config?: Config) => Streamie<O, Awaited<R>>;
 
+  // A .map that is also a terminal stage (sink: true): the handler is the endpoint —
+  // a forEach. Outputs are discarded as they settle and consumers cannot be
+  // registered; await .promise on the returned streamie for completion.
+  each: <R>(handler: Handler<O, R>, config?: Config) => Streamie<O, Awaited<R>>;
+
   filter: (handler: FilterHandler<O>, config?: Config) => Streamie<O, O>;
 
   batch: (batchSize: number, config?: BatchConfig) => Streamie<O, O[]>;
@@ -106,6 +136,11 @@ export type Streamie<I, O> = {
     ? (config?: Config) => Streamie<O, E>
     : never;
 
+  // Appends an explicit terminal stage (an identity .each): a pipeline built of
+  // pure transforms ends with .sink() to declare that reaching the end *is* the
+  // point, letting the chain drain rather than retain its final outputs.
+  sink: (config?: Config) => Streamie<O, O>;
+
   pause: (shouldPause?: boolean) => void;
   drain: () => void;
 
@@ -114,7 +149,9 @@ export type Streamie<I, O> = {
   // payload, rejects the streamie's promise and any queued push receipts, and is
   // delivered to async iterations as a rejection. Idempotent, and a no-op on a
   // streamie that has already halted or drained. An abort cascades downstream only
-  // when a consumer's feeders have all aborted; see onHalted/README.
+  // when a consumer's feeders have all aborted, and upstream only when a feeder is
+  // left with no consumers at all (see Config.keepAlive) — so aborting any stage
+  // tears down exactly the parts of the pipeline with nothing left to live for.
   abort: (error?: unknown) => void;
 
   registerInput: (inputStreamie: Streamie<any, I>) => void;
@@ -123,8 +160,9 @@ export type Streamie<I, O> = {
   // Each call registers a fresh consumer of this streamie's outputs, participating in
   // backpressure: the source only stays ahead of the iterator's pulls by its own
   // bounded output queue. Concurrent iterators each observe every item (outputs are
-  // broadcast to all consumers); an iterator only observes items processed after it
-  // was created.
+  // broadcast to all consumers). An iterator attached to a previously consumer-less
+  // streamie receives retained backlog; otherwise it observes only items not yet
+  // delivered to existing consumers.
   [Symbol.asyncIterator]: () => AsyncIterableIterator<O>;
 
   // Lifecycle events. Each is callable to attach a persistent handler and carries
