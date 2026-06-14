@@ -74,6 +74,13 @@ export default function streamie<I, R>(
     backpressureAt: validate.backpressureAt(config),
     concurrency: config.concurrency || 1,
     batchSize: internalConfig.batchSize || 1,
+    // The batch size as configured (null when unbatched), kept distinct from the
+    // coerced batchSize above. That one is the dequeue count, where 1 and "unbatched"
+    // are the same bare-item fast path; this one preserves intent. .batch(1) is a
+    // batching stage that emits single-element arrays — observably distinct from an
+    // unbatched streamie — even though both dequeue one item at a time. The core only
+    // ever reads batchSize; this exists for introspection (see isBatched).
+    configuredBatchSize: internalConfig.batchSize ?? null,
     maxBatchWait: internalConfig.maxBatchWait || Infinity,
     isFilter: internalConfig.isFilter === true,
     haltOnError: config.haltOnError !== false,
@@ -885,6 +892,16 @@ export default function streamie<I, R>(
     drain,
     abort,
 
+    // Reports whether this streamie is a batching stage (created via .batch). With no
+    // argument: whether a batch size was configured at all — true even for .batch(1),
+    // which emits single-element arrays and is observably distinct from an unbatched
+    // streamie. With an argument: whether the configured batch size is exactly that
+    // value. An unbatched streamie reports false for every query.
+    isBatched: (batchSize?: number) =>
+      batchSize === undefined
+        ? settings.configuredBatchSize !== null
+        : settings.configuredBatchSize === batchSize,
+
     registerInput,
     registerOutput,
 
@@ -913,6 +930,11 @@ export default function streamie<I, R>(
       },
       get isAborted() {
         return state.isAborted;
+      },
+      // The configured batch size: null when unbatched, the size passed to .batch
+      // otherwise (including 1). This is intent, not the internal dequeue count.
+      get batchSize() {
+        return settings.configuredBatchSize;
       },
     },
 

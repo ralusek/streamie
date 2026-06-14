@@ -130,6 +130,13 @@ export type Streamie<I, O> = {
 
   batch: (batchSize: number, config?: BatchConfig) => Streamie<O, O[]>;
 
+  // Reports whether this streamie is a batching stage (created via .batch). With no
+  // argument: true when a batch size was configured, including .batch(1) — a batching
+  // stage that emits single-element arrays, observably distinct from an unbatched
+  // streamie. With a size: whether the configured batch size is exactly that value. An
+  // unbatched streamie reports false for every query.
+  isBatched: (batchSize?: number) => boolean;
+
   // Only callable when the stream's items are themselves arrays; emits their elements
   // individually.
   flatten: [O] extends [readonly (infer E)[]]
@@ -188,6 +195,9 @@ export type Streamie<I, O> = {
     isDrained: boolean;
     isHalted: boolean;
     isAborted: boolean;
+    // The configured batch size: null when unbatched, the size passed to .batch
+    // otherwise (including 1). Intent, not the internal dequeue count.
+    batchSize: number | null;
     count: {
       handling: number;
       started: number;
