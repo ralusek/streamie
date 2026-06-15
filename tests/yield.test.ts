@@ -1,5 +1,6 @@
-import streamie, { fromReadableStream } from '../src';
-import { ReadableStream } from 'node:stream/web';
+import streamie from '../src';
+import { fromReadableStream } from '../src/web';
+// ReadableStream is a web-platform global (Node >= 18), the same surface a browser uses.
 
 // All of these pipelines need sink behavior to exhibit the problem at all: under
 // the retention default, a consumer-less streamie parks on its own output

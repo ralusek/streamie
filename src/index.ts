@@ -23,10 +23,6 @@ import PushReceipt from './utils/pushReceipt';
 import yieldToMacrotask from './utils/yieldToMacrotask';
 import currentSliceAge from './utils/eventLoopSlice';
 
-// Stream bridges
-import pumpReadableStream from './utils/streams/readable';
-import type { ReadableStreamLike, ReadableStreamChunkOf } from './utils/streams';
-
 type TimeoutId = ReturnType<typeof setTimeout>;
 
 export default function streamie<I, R>(
@@ -977,34 +973,8 @@ export default function streamie<I, R>(
   return self;
 }
 
-// WHATWG (web) stream bridges. The Streamie-suffixed names matter: the bare
-// Readable/Writable names belong to Node's stream classes, whose bridges live apart
-// so that node:stream never touches this entry.
-
-// Creates a streamie fed by a WHATWG ReadableStream. Items flow under backpressure
-// (the stream is only pulled as fast as the pipeline absorbs items, bounded by
-// backpressureAt); the stream ending drains the streamie, the stream erroring aborts
-// it with that error, and the streamie terminating cancels the stream's reader.
-// Because downstream failure cascades upstream through the core (a consumer halt
-// that leaves a streamie consumer-less aborts it, transitively), a failure at *any*
-// depth in the pipeline reaches the bridge and cancels the reader with the root
-// error — the source-cancellation contract of pipeTo across a pipeThrough chain.
-// preventCancel: true (pipeTo's option) keeps the stream itself out of it: the
-// bridge streamie still halts, but the reader lock is released without cancelling,
-// leaving the stream readable by another consumer.
-// The chunk type is recovered via ReadableStreamChunkOf (see its comment for why
-// inference can't run through ReadableStreamLike<T> directly), and the output is its
-// Awaited because handler results are awaited: a stream of thenables emits their
-// settled values (for any ordinary chunk type both are just the chunk type).
-export function fromReadableStream<S extends ReadableStreamLike<unknown>>(
-  stream: S,
-  config: Pick<Config, 'backpressureAt' | 'yieldAfter'> & { preventCancel?: boolean } = {},
-): Streamie<ReadableStreamChunkOf<S>, Awaited<ReadableStreamChunkOf<S>>> {
-  type T = ReadableStreamChunkOf<S>;
-  const bridged = streamie((input: T) => input, config);
-  pumpReadableStream(stream as ReadableStreamLike<T>, bridged, { preventCancel: config.preventCancel });
-  return bridged;
-}
-
-export { default as toWritableStream } from './utils/streams/writable';
-export type { ReadableStreamLike, WritableStreamLike } from './utils/streams';
+// The stream bridges live in opt-in entries, not here: the WHATWG bridges in
+// 'streamie/web' (which assumes a web-stream type environment) and the node:stream
+// bridges in 'streamie/node'. Keeping both out of this core entry is what lets it stay
+// free of any stream type dependency — a consumer with a bare ES lib can use the core
+// without a DOM or Node type environment in scope.

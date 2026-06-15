@@ -3,10 +3,11 @@
   "compilerOptions": {
     "noEmit": true,
     "strict": true,
-    // The point of this config: the rest of the project (and the main type tests)
-    // compile without DOM on purpose, so this is the one place that verifies the
-    // bridges' structural stream types accept the real lib.dom classes.
+    // The 'streamie/web' entry types against the real WHATWG stream globals, so its
+    // type tests need the DOM lib. The core type tests (tsconfig.type-tests.json) run
+    // without DOM on purpose, to prove the core needs no web-stream type environment;
+    // this is the one config that brings the globals in.
     "lib": ["ES2021", "DOM"]
   },
-  "include": ["tests/streams-dom.type-test.ts"]
+  "include": ["tests/streams-web.type-test.ts"]
 }

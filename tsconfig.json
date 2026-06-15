@@ -1,9 +1,14 @@
 {
   "compilerOptions": {
     "target": "es2020",
-    // Type-only: WeakRef (used by tests/collectability.test.ts) is an ES2021 lib
-    // type. Emitted output is still governed by target.
-    "lib": ["ES2021"],
+    // Type-only libs (emitted output is still governed by target):
+    //   ES2021 — WeakRef (used by tests/collectability.test.ts).
+    //   DOM    — the WHATWG stream globals (ReadableStream/WritableStream/
+    //            QueuingStrategy) that the 'streamie/web' entry (src/web.ts) types
+    //            against. Only web.ts and the bridge impls reference them; the core
+    //            uses none, and its lib-agnosticism is proven separately by the
+    //            ES2021-only type-tests (tsconfig.type-tests.json).
+    "lib": ["ES2021", "DOM"],
     "module": "commonjs",
     "declaration": true,
     "outDir": "./dist",

@@ -1,8 +1,8 @@
 // Types
 import type { Streamie } from '../../../types';
-import type { ReadableStreamLike, ReadableStreamDefaultReaderLike } from '..';
 
 // Utils
+import waitForCapacity from '../waitForCapacity';
 import type { Unsubscribe } from '../../events';
 
 // Pumps a WHATWG ReadableStream into a streamie: reads chunks and pushes them,
@@ -22,25 +22,31 @@ import type { Unsubscribe } from '../../events';
 // genuinely dead — it only spares the stream itself: the lock is released without
 // cancelling, leaving the stream readable by another consumer.
 //
-// This lives apart from fromReadableStream itself (in the main entry) because it
+// This lives apart from fromReadableStream itself (in the web entry) because it
 // only needs an existing streamie, keeping this module free of an import cycle with
 // the factory.
 export default function pumpReadableStream<I>(
-  stream: ReadableStreamLike<I>,
+  stream: ReadableStream<I>,
   target: Streamie<I, any>,
   options: { preventCancel?: boolean } = {},
 ): void {
-  // A zero-argument getReader() is guaranteed by spec to return the default reader;
-  // the cast just undoes the union ReadableStreamLike declares for lib.dom's
-  // overloads (see the type's comment).
-  const reader = stream.getReader() as ReadableStreamDefaultReaderLike<I>;
+  const reader = stream.getReader();
   let isStopped = false;
 
   // Unlocks the stream once the pump is done with it, the same finalization pipeTo
-  // performs. Guarded: releaseLock is optional on the structural type, and throws on
-  // some older implementations.
+  // performs. Guarded: releaseLock throws on some older implementations.
   function releaseReader() {
-    try { reader.releaseLock?.(); } catch {}
+    try { reader.releaseLock(); } catch {}
+  }
+
+  // The target's terminal-event subscriptions, torn down on any terminal path. Both
+  // onDraining and onHalted latch, so whichever fires clears itself — but a clean end
+  // fires only onDraining (a halt only onHalted), leaving the other subscription's
+  // closure (which retains this reader) attached to a long-lived target forever.
+  // finalize() unsubscribes both, closing that retention.
+  const subscriptions: Unsubscribe[] = [];
+  function finalize() {
+    while (subscriptions.length > 0) subscriptions.pop()!();
   }
 
   // Stops pulling and releases the source. cancel() also resolves any in-flight
@@ -51,6 +57,7 @@ export default function pumpReadableStream<I>(
   function stop(cancelReason?: unknown) {
     if (isStopped) return;
     isStopped = true;
+    finalize();
     // preventCancel: release the lock without cancelling. This rejects any
     // in-flight read(), which the pump loop's catch swallows (isStopped is set).
     if (options.preventCancel) return releaseReader();
@@ -60,32 +67,10 @@ export default function pumpReadableStream<I>(
   // The target terminating out from under the pump — an external abort, a downstream
   // handler error, an external drain — means it no longer accepts pushes. Both events
   // latch, so a target already terminated at pump creation stops before the first read.
-  target.onDraining(() => stop());
-  target.onHalted(({ isAborted, abortError, lastError }) => {
+  subscriptions.push(target.onDraining(() => stop()));
+  subscriptions.push(target.onHalted(({ isAborted, abortError, lastError }) => {
     stop(isAborted ? abortError : lastError ?? undefined);
-  });
-
-  // Resolves when the target can take another push: a backpressure release, or a
-  // termination (so the loop can observe isStopped rather than hang on a release
-  // that will never come).
-  function waitForCapacity(): Promise<void> {
-    return new Promise<void>((resolve) => {
-      let isSettled = false;
-      const unsubscribes: Unsubscribe[] = [];
-      const settle = () => {
-        if (isSettled) return;
-        isSettled = true;
-        for (const unsubscribe of unsubscribes) unsubscribe();
-        resolve();
-      };
-      unsubscribes.push(target.onBackpressureRelease.once(settle));
-      unsubscribes.push(target.onDraining.once(settle));
-      unsubscribes.push(target.onHalted.once(settle));
-      // A latched event invokes settle synchronously at subscription, before the
-      // later subscriptions exist; sweep again so none are left attached.
-      if (isSettled) for (const unsubscribe of unsubscribes) unsubscribe();
-    });
-  }
+  }));
 
   (async () => {
     while (true) {
@@ -94,13 +79,15 @@ export default function pumpReadableStream<I>(
       if (result.done) break;
       const receipt = target.push(result.value);
       if (receipt.backpressure) {
-        await waitForCapacity();
+        await waitForCapacity(target);
         if (isStopped) return;
       }
     }
     // Set before drain(): our own drain fires onDraining, and the stop() there would
-    // otherwise cancel a reader the stream has already cleanly ended.
+    // otherwise cancel a reader the stream has already cleanly ended. (finalize() also
+    // unsubscribes that onDraining handler before the drain, belt and suspenders.)
     isStopped = true;
+    finalize();
     releaseReader();
     target.drain();
   })().catch((error) => {
@@ -108,6 +95,7 @@ export default function pumpReadableStream<I>(
     // termination of the pipeline — exactly what abort models.
     if (isStopped) return;
     isStopped = true;
+    finalize();
     releaseReader();
     target.abort(error);
   });

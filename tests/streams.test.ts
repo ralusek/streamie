@@ -1,5 +1,8 @@
-import streamie, { fromReadableStream, toWritableStream } from '../src';
-import { ReadableStream, WritableStream, CountQueuingStrategy } from 'node:stream/web';
+import streamie from '../src';
+import { fromReadableStream, toReadableStream, toWritableStream } from '../src/web';
+// ReadableStream/WritableStream/CountQueuingStrategy are web-platform globals (present
+// on Node >= 18, the package's WHATWG floor), the same surface a browser consumer uses —
+// no node:stream/web import needed now that the bridges speak the real global types.
 
 describe('WHATWG stream bridges', () => {
   const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -381,6 +384,207 @@ describe('WHATWG stream bridges', () => {
       expect(written).toBeGreaterThan(5);
       expect(pushed).toBeLessThan(written + 10);
     });
+  });
+
+  describe('toReadableStream', () => {
+    // The return type exposes only getReader (the minimal structural surface); the
+    // runtime value is a genuine ReadableStream. Cast the reader to drive it.
+    async function readAll<T>(stream: { getReader(): any }): Promise<T[]> {
+      const reader = stream.getReader();
+      const out: T[] = [];
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        out.push(value);
+      }
+      return out;
+    }
+
+    test('emits the streamie outputs in order and closes when it drains', async () => {
+      const s = streamie((input: number) => input * 2, {});
+      [1, 2, 3].forEach((item) => s.push(item));
+      s.drain();
+
+      expect(await readAll<number>(toReadableStream(s))).toEqual([2, 4, 6]);
+    });
+
+    test('a streamie abort errors the produced stream with that error', async () => {
+      const s = streamie((input: number) => input, {});
+      const reader = toReadableStream(s).getReader() as any;
+      s.push(1);
+
+      expect((await reader.read()).value).toBe(1);
+      const error = new Error('source gone');
+      s.abort(error);
+      await expect(reader.read()).rejects.toBe(error);
+    });
+
+    test('a handler error halting the streamie errors the produced stream', async () => {
+      const s = streamie((input: number) => {
+        if (input === 2) throw new Error('boom');
+        return input;
+      }, {});
+      const reader = toReadableStream(s).getReader() as any;
+      [1, 2].forEach((item) => s.push(item));
+
+      // The halt's error preempts any buffered-but-unread output (error propagation is
+      // immediate, not queued behind in-flight items), so item 1 may or may not have
+      // surfaced before the rejection lands — read until it does.
+      await expect((async () => {
+        while (true) await reader.read();
+      })()).rejects.toThrow('boom');
+    });
+
+    test('an enqueue failure detaches the readable consumer', async () => {
+      const error = new Error('size failed');
+      const s = streamie((input: number) => input, {});
+      const readable = toReadableStream(s, {
+        highWaterMark: 1,
+        size() { throw error; },
+      });
+
+      // With no reader yet, the produced ReadableStream pulls ahead into its internal
+      // queue; the custom size() failure makes controller.enqueue throw.
+      s.push(1);
+      await delay(0);
+      const reader = readable.getReader() as any;
+      await expect(reader.read()).rejects.toBe(error);
+
+      // The detach path is intentionally microtask-deferred by async iteration.
+      await delay(0);
+      s.push(2);
+      await delay(0);
+
+      const seen: number[] = [];
+      const late = s.each((item) => { seen.push(item); });
+      s.drain();
+      await late.promise;
+
+      expect(seen).toEqual([2]);
+      expect(s.state.isAborted).toBe(false);
+    });
+
+    test('throws on a sink streamie, which has no consumable output', () => {
+      // A sink (.each/.sink) discards its outputs, so it refuses consumers — and
+      // toReadableStream registers one. The throw is synchronous, at the call: it is
+      // the same contract as any other attempt to consume a sink, surfaced here rather
+      // than handed back as a stream that would only ever produce nothing.
+      const s = streamie((input: number) => input, {});
+      const sink = s.each((item) => item);
+
+      expect(() => toReadableStream(sink)).toThrow('Cannot register an output on a sink streamie.');
+    });
+
+    test('an already-drained streamie produces an immediately-closing stream', async () => {
+      const s = streamie((input: number) => input, {});
+      s.drain();
+      await s.promise;
+
+      const reader = toReadableStream(s).getReader() as any;
+      expect((await reader.read()).done).toBe(true);
+    });
+
+    test('an already-aborted streamie produces an errored stream', async () => {
+      const s = streamie((input: number) => input, {});
+      const error = new Error('already gone');
+      s.abort(error);
+
+      const reader = toReadableStream(s).getReader() as any;
+      await expect(reader.read()).rejects.toBe(error);
+    });
+
+    test('cancelling the stream detaches as a voluntary departure, sparing a sibling', async () => {
+      // Cancel is the ReadableStream equivalent of breaking a for-await: a voluntary
+      // detach, not a failure. A sibling consumer must finish unaffected, and the
+      // streamie must not abort.
+      const s = streamie((input: number) => input, {});
+      const seen: number[] = [];
+      const sink = s.each((item) => { seen.push(item); });
+
+      const reader = toReadableStream(s).getReader() as any;
+      [1, 2, 3, 4].forEach((item) => s.push(item));
+      s.drain();
+
+      // Detach the readable consumer without draining it; the sibling sink proceeds.
+      await reader.cancel();
+      await sink.promise;
+
+      expect(seen).toEqual([1, 2, 3, 4]);
+      expect(s.state.isAborted).toBe(false);
+      expect(s.state.isDrained).toBe(true);
+    });
+
+    test('cancelling the sole consumer parks the streamie rather than aborting it', async () => {
+      // A voluntary detach that leaves the streamie consumer-less parks it (retained
+      // outputs, no upstream cascade) — it does not abort, exactly as an iterator
+      // break wouldn't.
+      const s = streamie((input: number) => input, {});
+      const reader = toReadableStream(s).getReader() as any;
+      s.push(1);
+
+      expect((await reader.read()).value).toBe(1);
+      await reader.cancel();
+      await delay(0);
+
+      expect(s.state.isAborted).toBe(false);
+      expect(s.state.isHalted).toBe(false);
+    });
+
+    test('is pull-driven: a slow reader paces the pipeline', async () => {
+      const s = streamie((input: number) => input, { backpressureAt: 2 });
+      const reader = toReadableStream(s).getReader() as any;
+
+      let pushed = 0;
+      const feed = setInterval(() => {
+        if (s.state.backpressure.input) return;
+        s.push(pushed += 1);
+      }, 1);
+
+      const got: number[] = [];
+      for (let i = 0; i < 5; i++) {
+        got.push((await reader.read()).value);
+        await delay(5);
+      }
+      await reader.cancel();
+      clearInterval(feed);
+
+      expect(got).toEqual([1, 2, 3, 4, 5]);
+      // An unpaced source would have produced far more; read backpressure keeps intake
+      // within the pipeline's bounded queues of what has been consumed.
+      expect(pushed).toBeLessThan(got.length + 10);
+    });
+
+    test('accepts a queuing strategy and still delivers in order', async () => {
+      const s = streamie((input: number) => input, {});
+      [1, 2, 3].forEach((item) => s.push(item));
+      s.drain();
+
+      expect(await readAll<number>(toReadableStream(s, { highWaterMark: 4 }))).toEqual([1, 2, 3]);
+    });
+  });
+
+  test('round trip: ReadableStream through a pipeline into a ReadableStream', async () => {
+    const source = new ReadableStream<number>({
+      start(controller) {
+        [1, 2, 3, 4].forEach((item) => controller.enqueue(item));
+        controller.close();
+      },
+    });
+
+    const out = toReadableStream(
+      fromReadableStream(source)
+        .filter((item) => item % 2 === 0)
+        .map((item) => item * 10),
+    );
+
+    const reader = out.getReader() as any;
+    const got: number[] = [];
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      got.push(value);
+    }
+    expect(got).toEqual([20, 40]);
   });
 
   test('round trip: ReadableStream through a pipeline into a WritableStream', async () => {

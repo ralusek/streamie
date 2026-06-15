@@ -1,6 +1,5 @@
 // Types
 import type { Streamie } from '../../../types';
-import type { WritableStreamLike } from '..';
 
 // Pipes a streamie's outputs into a WHATWG WritableStream, resolving once the
 // streamie has drained and the sink has closed — the same contract as
@@ -21,14 +20,13 @@ export default async function toWritableStream<O>(
   streamie: Streamie<any, O>,
   // NoInfer: O comes from the streamie alone. Real writers declare write(chunk?: W),
   // and inferring from that optional parameter would widen O to include undefined.
-  stream: WritableStreamLike<NoInfer<O>>,
+  stream: WritableStream<NoInfer<O>>,
 ): Promise<void> {
   const writer = stream.getWriter();
   // Unlocks the stream once the pipe is done with it, the same finalization pipeTo
-  // performs. Guarded: releaseLock is optional on the structural type, and throws on
-  // some older implementations.
+  // performs. Guarded: releaseLock throws on some older implementations.
   const releaseWriter = () => {
-    try { writer.releaseLock?.(); } catch {}
+    try { writer.releaseLock(); } catch {}
   };
   let isSinkFailure = false;
   try {

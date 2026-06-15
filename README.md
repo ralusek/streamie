@@ -8,19 +8,66 @@
 
 ### What is a streamie?
 
-A streamie is an alternative to promises, streams, async iterators, arrays, and reactive observables like rxJS or Highland.
-It provides a wide array of features like pagination, mapping, filtering, batching, flattening, and concurrency control.
+A streamie is a **concurrent async data pipeline with automatic backpressure**, wearing the
+interface of an array. You write `.map`, `.filter`, `.batch`, `.flatten`, `.each` over a
+collection that is asynchronous and potentially infinite; every handler is `async`, every
+stage runs at a concurrency you choose, and the whole chain self-regulates so no stage ever
+races ahead of what the next can absorb.
 
-### Why should I use a streamie?
+```ts
+await streamie(async (page: number, { push, drain }) => {
+  const { items, hasMore } = await fetchPage(page);
+  hasMore ? push(page + 1) : drain();
+  return items;                        // a page of records
+}, { seed: 0 })
+  .flatten()                           // → individual records
+  .map(enrich, { concurrency: 8 })     // 8 in flight, no more
+  .batch(25)                           // → groups of 25
+  .each(bulkUpload, { concurrency: 4 })// 4 uploads in flight
+  .promise;                            // resolves when fully drained; rejects on failure
+```
 
-Because it's the simplest and most familiar interface for common but complex behaviors on indefinite data.
+### Where it fits (and where it doesn't)
 
-A `streamie` has useful iterator methods like `.map`, `.filter`, and `.push` on an infinite, asynchronous collection. All handler functions in these iterators are themselves asynchronous, so promises returned in them will be awaited for the item to have been considered processed and the queue to progress.
+Reach for a streamie when the problem is **processing data**: ETL, scraping/pagination, job
+queues, fan-out/fan-in over network or disk, streaming transforms. Its peer group is
+Highland.js, Node object-mode streams, and the `p-map`/`p-queue` family — and against those
+its edge is doing the *whole* job (concurrency **and** backpressure **and** batching **and**
+rigorous completion/error semantics) behind one familiar interface, with TypeScript
+inference that flows through every stage.
 
-A `streamie` offers an extremely simple interface for modifying control flow through various asynchronous activities, notably:
-  - `concurrency`: for any iterative method, a `concurrency` can be specified to parallelize that asynchronous action
-  - `batching`/`flattening`: `.batch(n)` groups stream items into arrays of up to `n` before passing them on, and `.flatten()` does the opposite, emitting the elements of array items individually. Because these are pipeline stages rather than config flags, the item type at any point in a chain is always plain and inference just flows.
-  - `backpressure`: backpressure is **automatically** handled so that asynchronous tasks at different points in the pipeline cannot iterate beyond what its outputs are capable of handling.
+It is **not** a reactive-programming library, and is not trying to replace one. If you need
+to compose *events over time* — `debounceTime`, `combineLatest`, `withLatestFrom`, `zip`,
+`switchMap`, multicasting subjects, marble testing — that is RxJS's domain and you should
+use RxJS. The reverse is also true: RxJS is push-based and has no real backpressure, so for
+a fast producer feeding slow async work it will buffer unboundedly while a streamie simply
+stalls the producer. Different tools, different jobs.
+
+### What you get
+
+  - **Backpressure, automatically.** Bounded queues at every stage mean a slow consumer
+    transparently slows the producers feeding it — no unbounded buffering, no dropped items,
+    no manual `bufferTime`/`sample` juggling. Pushes return a [receipt](#push-receipts)
+    carrying both the item's completion promise and a cooperative backpressure signal.
+  - **Per-stage concurrency.** Any iterative method takes a `concurrency` to parallelize that
+    stage, and that parallelism is itself backpressure-correct — it never lets a stage
+    outrun what's downstream.
+  - **Batch / flatten as stages, not flags.** `.batch(n)` groups items into arrays of up to
+    `n`; `.flatten()` emits the elements of array items individually. Because they're real
+    pipeline stages, the item type at every point in the chain stays concrete and inference
+    flows without annotations.
+  - **Promise-native handlers everywhere.** A handler returning a promise is awaited before
+    its item counts as processed — `async`/`await` is the native idiom, not an adapter.
+  - **Rigorous lifecycle.** Graceful [`drain()`](#drainingcompletionpromises), abnormal
+    [`abort()`](#aborting), failure that cascades both downstream and upstream with precise
+    survival rules, [sinks](#sinks-each-sink-and-output-retention) and output retention,
+    latching lifecycle [events](#events), and a `.promise` that resolves on completion and
+    rejects on failure. Knowing exactly when a pipeline is *done* — or *why* it stopped — is
+    a first-class feature, not an afterthought.
+  - **Speaks the platform's protocols.** Every streamie is an
+    [async iterable](#async-iteration), and both [Web Streams](#web-streams) and
+    [Node streams](#node-streams) bridge directly in and out, so it drops into existing
+    code without ceremony.
 
 # Installation
 `npm install --save streamie`
@@ -348,10 +395,10 @@ to all consumers.
 
 WHATWG streams — the `ReadableStream`/`WritableStream` of browsers, Node (≥ 18),
 Deno, and Bun, e.g. `fetch` response bodies — bridge directly in and out of a
-pipeline:
+pipeline, from the opt-in **`streamie/web`** entry:
 
 ```ts
-import { fromReadableStream, toWritableStream } from 'streamie';
+import { fromReadableStream, toWritableStream } from 'streamie/web';
 
 await toWritableStream(
   fromReadableStream(someReadableStream)
@@ -359,6 +406,17 @@ await toWritableStream(
   someWritableStream,
 );
 ```
+
+The separate entry mirrors `streamie/node`, for the same reason: the core entry is
+kept free of any stream type dependency, so a consumer with a bare ES `lib` (no `dom`,
+no `@types/node`) can use the core with no stream types in scope. `streamie/web` types
+against the real WHATWG globals (`ReadableStream<T>`, `WritableStream<T>`), so importing
+it expects those types in your environment — browsers, Deno, and Bun have them via
+`lib.dom`; Node has them via a recent `@types/node` or the `dom` lib. (At runtime the
+globals exist on every WHATWG-stream runtime, Node ≥ 18 included, so the bridges stay as
+portable as the core — the requirement is purely on the *type* environment.) Typing
+against the real streams means chunk types flow by plain inference and the produced
+stream is a genuine `ReadableStream<O>`.
 
 `fromReadableStream(stream, { backpressureAt?, preventCancel? })` returns a streamie
 fed by the stream, under backpressure: the stream is only pulled as fast as the
@@ -387,13 +445,122 @@ rejects with that error. As with any iteration, retained outputs from a previous
 consumer-less streamie flush to it; outputs already delivered to other consumers do
 not replay.
 
-Both bridges release their reader/writer locks once finished with the stream, the
-same finalization `pipeTo` performs.
+`toReadableStream(streamie, strategy?)` is the mirror of `fromReadableStream`: it
+exposes a streamie's outputs *as* a `ReadableStream`, so anything that consumes web
+streams — `pipeThrough`, a `Response` body — can drive a pipeline.
 
-Both accept anything structurally satisfying the stream interfaces, so no DOM or Node
-type environment is required. The `Stream`-suffixed names are deliberate: bare
-`Readable`/`Writable` are Node's stream classes, whose bridges are separate so that
-`node:stream` never touches the main entry.
+```ts
+import { fromReadableStream, toReadableStream } from 'streamie/web';
+
+const body = toReadableStream(
+  fromReadableStream(request.body!)
+    .map((chunk) => transform(chunk), { concurrency: 4 }),
+);
+return new Response(body);   // body is a real ReadableStream<O> — no cast
+```
+
+The stream is pull-driven, which *is* WHATWG read backpressure: it pulls one item
+per read the consumer makes, so a slow reader paces the iterator, which paces the
+streamie, which builds backpressure up the pipeline. The streamie draining closes the
+stream; an abort or halt — including one cascaded from a failure anywhere in the
+pipeline — errors it with the terminating error, surfacing to readers. Cancelling the
+stream (`reader.cancel()`, or a `pipeTo` destination failing) is treated as a
+*voluntary* detach, the ReadableStream equivalent of breaking a `for await`: the
+streamie is unhooked as that consumer would be — a surviving sibling consumer is
+unaffected, and a now-consumer-less streamie parks on its retained outputs rather than
+aborting. The cancel reason is deliberately not propagated upstream as an abort, the
+same way WHATWG's own `ReadableStream` from an async iterable calls `return()`, not
+`throw()`. The optional `strategy` is a standard queuing strategy tuning how far the
+produced stream reads ahead (default high water mark `1`). A sink (`.each`/`.sink`)
+has no consumable output, so calling `toReadableStream` on one throws, the same as any
+other attempt to consume a sink.
+
+`toReadableStream` is the one bridge that *constructs* a stream, via the global
+`ReadableStream` constructor — a web-platform global present in browsers, Node (≥ 18),
+Deno, and Bun, so still no import and no `node:stream`. The receiving bridges
+(`fromReadableStream`, `toWritableStream`) only call methods on a stream you hand
+them, and release their reader/writer locks once finished with it, the same
+finalization `pipeTo` performs.
+
+Because the produced stream is a genuine `ReadableStream<O>`, DOM consumers accept it
+directly — `new Response(body)`, `pipeThrough`, a `ReadableStream<O>` parameter — with
+no cast. The `Stream`-suffixed names are deliberate: bare `Readable`/`Writable` are
+Node's stream classes, whose bridges live in `streamie/node` (see Node Streams);
+`node:stream` never touches this entry, nor it `streamie/web`.
+
+## Node Streams
+
+Node's object-mode streams — `Readable`/`Writable` from `node:stream` — bridge the
+same way, but from a **separate entry point**, `streamie/node`:
+
+```ts
+import streamie from 'streamie';
+import { fromReadable, toReadable, toWritable } from 'streamie/node';
+```
+
+The split is deliberate and the reason the import path differs: `node:stream` is a
+Node-only dependency, and the core entry depends on no stream environment at all.
+Nothing in `streamie/node` is reachable from the core, so pulling `node:stream` is
+opt-in, paid for only by code that imports it; a browser bundle never sees it. (The
+WHATWG bridges sit behind their own `streamie/web` entry for the symmetric reason — see
+Web Streams.)
+
+The three bridges mirror their WHATWG siblings one-to-one, with the same termination
+and backpressure contracts:
+
+- **`fromReadable<T>(readable, { backpressureAt?, yieldAfter? })`** — a streamie fed by
+  a Node `Readable`, under backpressure: the stream is only consumed as fast as the
+  pipeline absorbs items. The stream ending drains the streamie; the stream erroring
+  aborts it with that error; and the streamie terminating — drained, aborted, or
+  halted, including a halt cascaded from a failure anywhere downstream — destroys the
+  stream. Because a `Readable` isn't generic over what it yields, name the chunk type
+  yourself (`fromReadable<Buffer>(req)`); it defaults to `unknown`. Teardown always
+  `destroy()`s the source (error-free, so it raises no spurious `'error'`); there is no
+  `preventCancel` equivalent — the WHATWG-only escape hatch for leaving a shared stream
+  readable by another consumer — so don't hand `fromReadable` a `Readable` you intend
+  to keep reading elsewhere afterward.
+- **`toWritable(streamie, writable)`** — pipes a streamie's outputs into a Node
+  `Writable`, resolving once the streamie has drained and the sink has finished.
+  `write()`'s return value paces the pipeline (Node write backpressure); a streamie
+  abort or halt destroys the sink with the terminating error, and a sink failure
+  aborts the streamie — in each case the returned promise rejects with that error.
+- **`toReadable(streamie, options?)`** — the mirror of `fromReadable`: exposes a
+  streamie's outputs *as* a Node `Readable` (object mode by default), pull-driven so
+  the consumer's reads pace the pipeline. The streamie draining ends the stream; an
+  abort or halt errors it; destroying the stream detaches it from the streamie as a
+  *voluntary* departure (a surviving sibling consumer is unaffected, and a now
+  consumer-less streamie parks on its retained outputs), the same as breaking a
+  `for await`. `options` are standard Node `ReadableOptions`; the `highWaterMark`
+  defaults to `1` (mirroring `toReadableStream`, not Node's object-mode default of 16),
+  so the produced stream reads exactly one item ahead of a slow consumer rather than
+  buffering 16 — pass a larger `highWaterMark` for looser read-ahead. Pass
+  `objectMode: false` for a byte stream whose outputs are already
+  `Buffer`/`Uint8Array`/`string`; in byte mode the bridge leaves `highWaterMark`
+  untouched, but note that `Readable.from` itself defaults it to `1` (one pull per read,
+  not the 64 KB of `new Readable()`), so set it explicitly (e.g. `65536`) if you want a
+  real byte buffer.
+
+```ts
+import { createReadStream, createWriteStream } from 'node:fs';
+import { fromReadable, toWritable } from 'streamie/node';
+
+await toWritable(
+  fromReadable<Buffer>(createReadStream('in.ndjson'))
+    .map((chunk) => transform(chunk), { concurrency: 8 }),
+  createWriteStream('out.ndjson'),
+);
+```
+
+These are implemented natively rather than by converting through the WHATWG bridges
+(`Readable.toWeb`/`fromWeb`): the adapters are still experimental in Node and would
+interpose a second stream object — an extra queue and backpressure handshake per
+chunk — between the node stream and the pipeline. If you'd rather route through the
+web bridges anyway, you can: `fromReadableStream(Readable.toWeb(nodeReadable))` and the
+like work, at that cost.
+
+These type their streams against `@types/node`, just as `streamie/web` types against the
+WHATWG globals: each opt-in entry assumes its own stream type environment, which is
+exactly what keeps the core entry free of both.
 
 ## Typescript
 
