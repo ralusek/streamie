@@ -22,16 +22,46 @@
   "files": [
     "dist"
   ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "build": "tsc",
+    "prepublishOnly": "npm run build",
     "bench": "node --expose-gc benchmark/fused-vs-composed.js",
     "test": "node --max-old-space-size=8192 ./node_modules/.bin/jest",
     "test:types": "tsc -p tsconfig.type-tests.json --noEmit && tsc -p tsconfig.dom-type-tests.json --noEmit",
     "test:memory": "node --expose-gc --max-old-space-size=8192 ./node_modules/.bin/jest --config jest.memory.config.js --runInBand"
   },
-  "keywords": [],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ralusek/streamie.git"
+  },
+  "homepage": "https://github.com/ralusek/streamie#readme",
+  "bugs": {
+    "url": "https://github.com/ralusek/streamie/issues"
+  },
+  "keywords": [
+    "stream",
+    "streams",
+    "async",
+    "pipeline",
+    "backpressure",
+    "concurrency",
+    "batch",
+    "batching",
+    "queue",
+    "etl",
+    "data-processing",
+    "async-iterator",
+    "flatmap",
+    "map",
+    "filter",
+    "typescript"
+  ],
   "author": "Tomas Savigliano <ralusek@gmail.com>",
-  "license": "ISC",
+  "license": "MIT",
   "devDependencies": {
     "@types/jest": "^29.5.1",
     "@types/node": "^18.16.3",
