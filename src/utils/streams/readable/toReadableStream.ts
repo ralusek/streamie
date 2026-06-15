@@ -27,7 +27,7 @@ import type { Streamie } from '../../../types';
 // pumpReadableStream does: it needs only an existing streamie, so keeping it here
 // avoids an import cycle with the factory.
 export default function toReadableStream<O>(
-  streamie: Streamie<any, O>,
+  streamie: Streamie<any, O, any>,
   strategy?: QueuingStrategy<O>,
 ): ReadableStream<O> {
   // The constructor is a web-platform global (browser, Node >= 18, Deno, Bun); the

@@ -153,7 +153,7 @@ export default function createAsyncIterator<OutputItem>(
       onBackpressureRelease: consumerEventHandlers.backpressureRelease.on,
       onDraining: consumerEventHandlers.draining.on,
       onHalted: consumerEventHandlers.halted.on,
-      registerInput: (inputStreamie: Streamie<any, OutputItem>) => {
+      registerInput: (inputStreamie: Streamie<any, OutputItem, any>) => {
         sourceSubscriptions.push(inputStreamie.onDrained(handleSourceDone));
         // A halt without error propagation ends the iteration silently, the same way
         // a downstream streamie drains when its halted input is removed. When errors

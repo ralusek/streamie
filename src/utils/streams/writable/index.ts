@@ -17,7 +17,7 @@ import type { Streamie } from '../../../types';
 // will flush here; with existing consumers, iteration observes only items not yet
 // delivered to them.
 export default async function toWritableStream<O>(
-  streamie: Streamie<any, O>,
+  streamie: Streamie<any, O, any>,
   // NoInfer: O comes from the streamie alone. Real writers declare write(chunk?: W),
   // and inferring from that optional parameter would widen O to include undefined.
   stream: WritableStream<NoInfer<O>>,

@@ -26,7 +26,7 @@ import type { Streamie } from '../../../types';
 // has to NoInfer O out of the writer's parameter — there is nothing here to infer O
 // against; the streamie is its sole source.
 export default function toWritable<O>(
-  streamie: Streamie<any, O>,
+  streamie: Streamie<any, O, any>,
   writable: Writable,
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {

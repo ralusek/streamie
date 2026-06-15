@@ -43,7 +43,7 @@ import { Readable } from 'node:stream';
 // not the 64 KB of new Readable(), so a real byte buffer wants an explicit value). All
 // overridable through options.
 export default function toReadable<O>(
-  streamie: Streamie<any, O>,
+  streamie: Streamie<any, O, any>,
   options?: ReadableOptions,
 ): Readable {
   const objectMode = options?.objectMode ?? true;

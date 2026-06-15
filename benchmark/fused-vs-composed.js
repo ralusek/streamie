@@ -1,11 +1,19 @@
 /**
- * Compares a fused stage, configured through the internal (non-public) config:
+ * Compares a single fused stage that batches, transforms, and expands in one
+ * invocation:
  *
- *   head.map(handler, { batchSize: 10, flatten: true })   // internal config keys
+ *   head.map(emitEach(handler), { batchSize: 10, automaticallyEmit: false })
  *
  * against the public combinator-style equivalent:
  *
  *   head.batch(10).map(handler).flatten()
+ *
+ * batchSize is still core config; expanding a batch into individual outputs is now
+ * done by emitting per element (automaticallyEmit: false hands the handler a
+ * tools.emit and suppresses the single auto-emit of the return value) — the same
+ * primitive the flatten combinator is built on. So the fused arm measures the cost of
+ * one emit-driven stage, and the composed arm the cost of three combinator stages,
+ * doing identical work through an identical `handler`.
  *
  * Both pipelines share an identical identity head stage and end in an identical
  * counting sink stage so feeding and output handling costs match. Items are fed
@@ -26,6 +34,25 @@ const N_ASYNC = Number(process.env.N_ASYNC) || 50_000;
 const REPS = Number(process.env.REPS) || 5;
 
 const identity = (x) => x;
+
+// Wraps a batch handler (batch -> array | Promise<array>) into a fused stage that
+// emits each element individually, the single-stage equivalent of .map(handler).flatten().
+// Returns the handler's array so the fused arm's receipts mirror the composed arm's
+// flatten receipts; handles a sync or async handler without forcing async overhead on
+// the sync arms.
+function emitEach(handler) {
+  return (batch, { emit }) => {
+    const out = handler(batch);
+    if (out && typeof out.then === 'function') {
+      return out.then((arr) => {
+        for (let i = 0; i < arr.length; i++) emit(arr[i]);
+        return arr;
+      });
+    }
+    for (let i = 0; i < out.length; i++) emit(out[i]);
+    return out;
+  };
+}
 
 // Pushes [0, n) into the head streamie in chunks, backing off whenever the
 // head reports input backpressure and resuming on its release event.
@@ -56,9 +83,10 @@ async function run({ shape, n, handler, workConfig }) {
   let tail;
 
   if (shape === 'fused') {
-    // batchSize/flatten are internal config (the public API expresses them via the
-    // batch/flatten combinators); the fused arm exists to measure what fusion buys.
-    tail = head.map(handler, { batchSize: BATCH_SIZE, flatten: true, ...workConfig });
+    // batchSize is internal config (the public API expresses it via the batch
+    // combinator); expanding the batch is done by emitting per element. The fused arm
+    // exists to measure what collapsing the three combinator stages into one buys.
+    tail = head.map(emitEach(handler), { batchSize: BATCH_SIZE, automaticallyEmit: false, ...workConfig });
   } else {
     tail = head
       .batch(BATCH_SIZE)

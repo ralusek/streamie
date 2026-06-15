@@ -38,6 +38,13 @@ export type Config = {
   // continuously this long (milliseconds; default 100). Pipelines doing real
   // asynchronous work yield naturally and never hit this.
   yieldAfter?: number;
+  // By default a stage produces one output per handler invocation: the handler's
+  // settled return value is emitted automatically. Set false to decouple output from
+  // return — the handler is handed an `emit` in its tools and produces as many (or as
+  // few) outputs as it likes, whenever it likes; the return value then feeds only the
+  // push receipt, not the pipeline. This is the primitive the filter and flatten
+  // combinators are built on (a conditional emit and a per-element emit, respectively).
+  automaticallyEmit?: boolean;
 };
 
 export type BatchConfig = Config & {
@@ -46,25 +53,39 @@ export type BatchConfig = Config & {
   maxBatchWait?: number;
 };
 
-// Batching, flattening, and filtering are implemented by the core process loop, but are
-// only exposed publicly through the batch/flatten/filter combinators, which configure
-// them via this internal type. Keeping them off the public Config is what allows
-// Streamie's types to stay free of conditional types.
+// Batching is implemented by the core process loop (filtering and flattening are now
+// ordinary automaticallyEmit: false stages built on tools.emit), exposed publicly only
+// through the batch combinator, which configures it via this internal type. Keeping
+// these off the public Config is what allows Streamie's types to stay free of
+// conditional types.
 /** @internal */
 export type InternalConfig = Config & {
   batchSize?: number;
   maxBatchWait?: number;
-  flatten?: boolean;
-  isFilter?: boolean;
 };
 
-export type Tools<I> = {
+export type Tools<I, O = unknown> = {
   // The streamie's own public push. Typing the receipt's promise here would be
   // circular — it resolves with the very output type the handler receiving these
   // tools is in the middle of defining — so tools expose only the synchronous
   // metadata. (At runtime it is the full receipt, for the untyped/casting caller.)
   push: (item: I) => { backpressure: boolean };
   drain: () => void;
+  // Appends an output to this stage, delivered to consumers exactly like an
+  // automatically-emitted return value. The general form of producing output: a
+  // normal stage emits its return value once for you, a filter emits conditionally,
+  // a flatten emits once per element. A stable reference across invocations, safe to
+  // call any number of times (including zero). Without automaticallyEmit: false the
+  // stage also auto-emits the return value, so most handlers ignore this entirely.
+  //
+  // O defaults to unknown — the type an auto-emit handler sees, where the output type
+  // is the return value and tying emit to it would put that type in a parameter
+  // position while it is still being inferred from the return, breaking inference. The
+  // decoupled combinator forms (automaticallyEmit: false) set O instead, from an
+  // explicit type argument or an annotation on this very parameter; that typed emit is
+  // then what drives the stage's output type, since TypeScript cannot read the output
+  // type out of the emit() calls in the handler body.
+  emit: (output: O) => void;
   index: number;
 };
 
@@ -114,12 +135,49 @@ export type FilterHandler<I> = (
   tools: Tools<I>,
 ) => MaybePromise<boolean>;
 
-export type Streamie<I, O> = {
+// I = input item type; O = stream output type (what consumers and iterators see); R =
+// the handler's settled return value. O and R coincide for an auto-emit stage (the
+// return value IS the single output), and diverge only for the decoupled forms
+// (automaticallyEmit: false, where emit produces O and the return is a separate R) and
+// for flatten (output is each element, return is the whole pre-flatten array). R is
+// what a push receipt resolves with. It defaults to O so the two-argument form
+// Streamie<I, O> stays correct and unchanged for every auto-emit stage; only code that
+// pushes to and awaits a decoupled/flatten stage needs the third argument. (A "don't
+// care about R" position — the register methods, the bridges — must write the third
+// argument as `any`, since with the default it would otherwise pin R to a concrete O.)
+export type Streamie<I, O, R = O> = {
   // Synchronous; returns a receipt carrying the backpressure state the push produced
-  // and a lazy promise for the item's output — see PushReceipt.
-  push: (item: I) => PushReceipt<O>;
+  // and a lazy promise for the item's handler-return value R — see PushReceipt.
+  push: (item: I) => PushReceipt<R>;
 
-  map: <R>(handler: Handler<O, R>, config?: Config) => Streamie<O, Awaited<R>>;
+  map: {
+    // Decoupled output (automaticallyEmit: false): the stage's output type NO is the
+    // caller's to supply — an explicit type argument (`.map<NO>(handler, …)`) or an
+    // annotation on the emit parameter — and it types tools.emit. The handler's return
+    // value is a separate type NR, inferred from the return and surfaced as the stage's
+    // receipt type; it does not reach the stream. NO defaults to unknown when the caller
+    // supplies neither, because TypeScript cannot infer it from the emit() calls in the
+    // body. Listed first so it is chosen when the config selects it.
+    // NR defaults to unknown so the explicit-output form `.map<NO>(…)` resolves here:
+    // TypeScript's explicit type arguments are all-or-nothing for non-defaulted
+    // parameters, so without the default, providing only NO would fail to match this
+    // overload and fall through to the default one. The trade-off is that `.map<NO>()`
+    // gets a precise output but an unknown receipt type (NR can't be inferred once NO is
+    // given explicitly); annotating the emit parameter instead keeps BOTH precise.
+    <NO, NR = unknown>(
+      handler: (input: O, tools: Tools<O, NO>) => MaybePromise<NR>,
+      config: Config & { automaticallyEmit: false },
+    ): Streamie<O, NO, Awaited<NR>>;
+    // Default: one output per invocation, the handler's settled return value — which is
+    // therefore both the output and the receipt type (R defaults to O). The decoupled
+    // overload above is selected only by a literal automaticallyEmit: false, so this
+    // (which keeps automaticallyEmit at its plain Config type) catches everything else,
+    // including internal combinator calls passing a plain Config.
+    <NR>(
+      handler: Handler<O, NR>,
+      config?: Config,
+    ): Streamie<O, Awaited<NR>>;
+  };
 
   // A .map that is also a terminal stage (sink: true): the handler is the endpoint —
   // a forEach. Outputs are discarded as they settle and consumers cannot be
@@ -138,10 +196,46 @@ export type Streamie<I, O> = {
   isBatched: (batchSize?: number) => boolean;
 
   // Only callable when the stream's items are themselves arrays; emits their elements
-  // individually.
+  // individually. Output is the element type E, but the receipt type is the whole
+  // pre-flatten array O — all the outputs the item produced — so R is O, not E.
   flatten: [O] extends [readonly (infer E)[]]
-    ? (config?: Config) => Streamie<O, E>
+    ? (config?: Config) => Streamie<O, E, O>
     : never;
+
+  // The general output-producing stage (automaticallyEmit: false): the handler is handed
+  // tools.emit and produces zero or more outputs per input, whenever it likes, while its
+  // return value feeds only the push receipt. map, filter, and flatten are specializations
+  // of this. The output type NO is the caller's to supply — an explicit type argument
+  // (`.produce<NO>(…)`) or an annotation on the emit parameter — since TypeScript cannot
+  // infer it from the emit() calls in the body; left unsupplied it is unknown. NR (the
+  // receipt type) is inferred from the return value, but, as with the decoupled .map
+  // overload, providing NO explicitly forces NR to its default — annotate the emit
+  // parameter instead to keep both precise.
+  produce: <NO, NR = unknown>(
+    handler: (input: O, tools: Tools<O, NO>) => MaybePromise<NR>,
+    config?: Config,
+  ) => Streamie<O, NO, Awaited<NR>>;
+
+  // Aggregate the stream to a single value, emitted once when the stream drains: the
+  // accumulator is threaded through every item and the final result is emitted on drain,
+  // including the untouched initialValue when the stream produced no items. The fold is
+  // sequential (concurrency 1). A push receipt resolves with the accumulator after that
+  // item was folded in.
+  reduce: <A>(
+    reducer: (accumulator: A, item: O) => MaybePromise<A>,
+    initialValue: A,
+    config?: Config,
+  ) => Streamie<O, A>;
+
+  // Running reduce: the accumulator is threaded through every item and emitted after each
+  // one (so an N-item stream yields N outputs, the running totals). Like reduce the fold is
+  // sequential (concurrency 1); unlike reduce it emits intermediate results rather than only
+  // the final one, and emits nothing for an empty stream.
+  scan: <A>(
+    reducer: (accumulator: A, item: O) => MaybePromise<A>,
+    initialValue: A,
+    config?: Config,
+  ) => Streamie<O, A>;
 
   // Appends an explicit terminal stage (an identity .each): a pipeline built of
   // pure transforms ends with .sink() to declare that reaching the end *is* the
@@ -161,8 +255,8 @@ export type Streamie<I, O> = {
   // tears down exactly the parts of the pipeline with nothing left to live for.
   abort: (error?: unknown) => void;
 
-  registerInput: (inputStreamie: Streamie<any, I>) => void;
-  registerOutput: (outputStreamie: Streamie<O, any>) => void;
+  registerInput: (inputStreamie: Streamie<any, I, any>) => void;
+  registerOutput: (outputStreamie: Streamie<O, any, any>) => void;
 
   // Each call registers a fresh consumer of this streamie's outputs, participating in
   // backpressure: the source only stays ahead of the iterator's pulls by its own
@@ -185,6 +279,10 @@ export type Streamie<I, O> = {
 
   _pushQueueError: (error: StreamieQueueError<any>) => void;
   _receive: (...items: I[]) => void;
+  // Appends a single output from outside a handler invocation, used by drain-flush
+  // combinators (reduce). Not part of the public surface — like _receive it injects into
+  // this streamie's queues directly and should not be called for any other reason.
+  _emit: (output: O) => void;
 
   state: {
     backpressure: {

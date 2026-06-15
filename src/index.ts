@@ -25,11 +25,35 @@ import currentSliceAge from './utils/eventLoopSlice';
 
 type TimeoutId = ReturnType<typeof setTimeout>;
 
-export default function streamie<I, R>(
+// Decoupled-output form: with automaticallyEmit: false the handler produces output
+// through tools.emit rather than its return value, so the output type O is the caller's
+// to supply — an explicit type argument or an annotation on the emit parameter (see the
+// note on Tools; TypeScript can't read it out of the emit() calls in the body). The
+// return value is a separate type R, inferred from the return and surfaced as the
+// receipt type. R defaults to unknown so the explicit-output form `streamie<In, Out>(…)`
+// resolves here (TypeScript's explicit type arguments are all-or-nothing for
+// non-defaulted parameters, so without the default, providing I and O but not R would
+// fall through to the default overload); the trade-off is an unknown receipt type in
+// that form, while annotating the emit parameter keeps the receipt precise.
+function streamie<I, O, R = unknown>(
+  handler: (input: I, tools: Tools<I, O>) => MaybePromise<R>,
+  config: Config & { automaticallyEmit: false; seed?: NoInfer<I> },
+): Streamie<I, O, Awaited<R>>;
+// Default form: one output per invocation, inferred from the handler's return value.
+// automaticallyEmit is widened back to boolean here (not just true) so configs typed as
+// plain Config — every internal combinator call — still match: the decoupled overload
+// above is selected only by a *literal* false, which a boolean-typed property can't be.
+function streamie<I, R>(
   handler: (input: I, tools: Tools<I>) => MaybePromise<R>,
-  config: Config & {
+  config?: Config & {
     // When calling streamie directly, we allow a seed value to be passed.
     // NoInfer keeps seed from overpowering the handler parameter type.
+    seed?: NoInfer<I>;
+  },
+): Streamie<I, Awaited<R>>;
+function streamie<I, R>(
+  handler: (input: I, tools: Tools<I>) => MaybePromise<R>,
+  config: Config & {
     seed?: NoInfer<I>;
   } = {},
 ): Streamie<I, Awaited<R>> {
@@ -47,12 +71,11 @@ export default function streamie<I, R>(
     // path — pays nothing for receipt tracking unless a receipt can actually exist.
     receipt: RingBuffer<PushReceipt<OutputItem> | undefined> | null;
     output: {
-      // A queue pairing the input items with their final stream output item. The input
-      // is a single item for unbatched streamies, or the handled batch for batched ones.
-      success: RingBuffer<{
-        input: I | I[];
-        output: OutputItem;
-      }>;
+      // The settled output items awaiting delivery to consumers. (This once paired each
+      // output with the input that produced it, but nothing read the input half —
+      // processOutput delivers only the output — so it was pure per-item allocation. A
+      // handler wanting the pairing can return { input, output } itself.)
+      success: RingBuffer<OutputItem>;
     };
   } = {
     // Ring buffers rather than plain arrays: dequeuing from an array via
@@ -78,13 +101,15 @@ export default function streamie<I, R>(
     // ever reads batchSize; this exists for introspection (see isBatched).
     configuredBatchSize: internalConfig.batchSize ?? null,
     maxBatchWait: internalConfig.maxBatchWait || Infinity,
-    isFilter: internalConfig.isFilter === true,
     haltOnError: config.haltOnError !== false,
-    flatten: internalConfig.flatten === true,
     propagateErrors: config.propagateErrors !== false,
     yieldAfter: config.yieldAfter ?? 100,
     isSink: config.sink === true,
     keepAlive: config.keepAlive === true,
+    // Whether the handler's return value is emitted for it. False decouples output
+    // from return: the handler emits via tools.emit and its return value feeds only
+    // the receipt. The filter/flatten combinators set this internally.
+    automaticallyEmit: config.automaticallyEmit !== false,
   };
 
   const state: {
@@ -138,8 +163,8 @@ export default function streamie<I, R>(
     lastError: null,
   };
 
-  const outputStreamies: Set<Streamie<OutputItem, any>> = new Set();
-  const inputStreamies: Set<Streamie<any, I>> = new Set();
+  const outputStreamies: Set<Streamie<OutputItem, any, any>> = new Set();
+  const inputStreamies: Set<Streamie<any, I, any>> = new Set();
 
   // Abort accounting for terminated inputs (see handleInputTerminated): the abortError
   // of each input that aborted, and whether any input halted without aborting.
@@ -217,39 +242,34 @@ export default function streamie<I, R>(
 
   // Internal functions
 
-  // Routes a settled handler output into the output queue, applying the internal filter
-  // and flatten behaviors. May throw (e.g. flattening a non-array); callers are
-  // responsible for converting that into a queue error.
-  function settleSuccess(handlerInput: I | I[], handlerOutput: unknown) {
+  // The auto-emit path: a stage with automaticallyEmit on (the default) produces its
+  // handler's settled return value as a single output. Filtering (conditional emit) and
+  // flattening (per-element emit) are no longer special cases here — they are ordinary
+  // automaticallyEmit: false stages built on tools.emit (see the filter/flatten
+  // combinators). Unlike tools.emit this doesn't schedule a flush: the process loop that
+  // drove this invocation flushes the output queue in the same pass.
+  function settleSuccess(handlerOutput: unknown) {
     // A sink's handler is the endpoint: its outputs go nowhere by declaration, and
     // consumers can never be registered on it, so the output queue would be pure
     // overhead — skip it entirely. (Receipts still resolve with the handler output;
     // they were settled by the caller, not by this queue.)
     if (settings.isSink) return;
-    // If the handler is a filter, the return value is a boolean, and if the return value is false, we
-    // do not push to the output queue. If the output is truthy, we pass the input through to
-    // the output queue.
-    if (settings.isFilter) {
-      if (!handlerOutput) return; // Handler returned false, so we do not push anything to the output queue.
-      const successQueue = queue.output.success as RingBuffer<{ input: unknown, output: unknown }>;
-      if (!settings.flatten) {
-        successQueue.push({ input: handlerInput, output: handlerInput });
-        return;
-      }
-      if (!Array.isArray(handlerInput)) throw new Error('Cannot flatten input that is not an array.');
-      for (let i = 0; i < handlerInput.length; i++) {
-        successQueue.push({ input: handlerInput[i], output: handlerInput[i] });
-      }
-      return;
-    }
+    queue.output.success.push(handlerOutput as OutputItem);
+  }
 
-    if (settings.flatten) {
-      if (!Array.isArray(handlerOutput)) throw new Error('Cannot flatten output that is not an array.');
-      for (let i = 0; i < handlerOutput.length; i++) {
-        queue.output.success.push({ input: handlerInput, output: handlerOutput[i] as OutputItem });
-      }
-    }
-    else queue.output.success.push({ input: handlerInput, output: handlerOutput as OutputItem });
+  // The general output primitive handed to handlers as tools.emit: append a value to
+  // this stage's output queue for delivery to consumers. A stable reference — it closes
+  // over nothing invocation-specific — so handing it to every handler costs no per-item
+  // allocation (this is the whole reason output attribution had to go: routing an emit
+  // back to its originating input's receipt would, under concurrency, force a fresh
+  // closure per invocation). A sink has no output queue, so its emit is a no-op. Flushes
+  // via scheduleProcess so a handler emitting mid-flight (before it returns) still
+  // streams downstream promptly rather than buffering until it settles; the deferral is
+  // guarded, so emitting many times costs at most one scheduled pass.
+  function emit(output: unknown) {
+    if (settings.isSink) return;
+    queue.output.success.push(output as OutputItem);
+    scheduleProcess();
   }
 
   // The receipts dequeued alongside one handler invocation's input: a single
@@ -325,6 +345,7 @@ export default function streamie<I, R>(
         handlerInput, {
           drain: self.drain,
           push: self.push,
+          emit,
           index,
         },
       );
@@ -343,13 +364,13 @@ export default function streamie<I, R>(
       return (handlerOutput as Promise<unknown>).then(
         (output) => {
           try {
-            settleSuccess(handlerInput, output);
-            // A receipt resolves with what its invocation contributed downstream:
-            // the handler output, except for filter stages, where the handler output
-            // is the predicate's boolean and the value passed through is the input
-            // itself. (For a flatten stage this is the pre-flatten array — i.e. all
-            // of the outputs the item produced.)
-            resolveReceipts(receipts, settings.isFilter ? handlerInput : output);
+            if (settings.automaticallyEmit) settleSuccess(output);
+            // A receipt resolves with its invocation's settled return value — the
+            // signal is "finished processing," and the value is whatever the handler
+            // returned. For a normal stage that is the emitted output; for a filter it
+            // is the item itself (the sugar returns the item, emitting separately); for
+            // a flatten it is the pre-flatten array.
+            resolveReceipts(receipts, output);
           } catch (err) {
             handleError(err);
           }
@@ -365,9 +386,9 @@ export default function streamie<I, R>(
     // Sync fast path: the handler returned a non-thenable, so we settle inline rather
     // than paying for promise allocation and a microtask hop on every invocation.
     try {
-      settleSuccess(handlerInput, handlerOutput);
+      if (settings.automaticallyEmit) settleSuccess(handlerOutput);
       // See the resolution-value note on the asynchronous path above.
-      resolveReceipts(receipts, settings.isFilter ? handlerInput : handlerOutput);
+      resolveReceipts(receipts, handlerOutput);
     } catch (err) {
       handleError(err);
     }
@@ -375,9 +396,9 @@ export default function streamie<I, R>(
   }
 
   function processOutput() {
-    const success = queue.output.success.shift();
+    const output = queue.output.success.shift()!;
     outputStreamies.forEach((consumer) => {
-      consumer._receive(success!.output);
+      consumer._receive(output);
     });
   }
 
@@ -641,18 +662,30 @@ export default function streamie<I, R>(
     return each((item: OutputItem) => item, config) as Streamie<OutputItem, OutputItem>;
   }
 
-  // NOTE: filtering (dropping items) is implemented by the core process loop, not here.
-  // Don't be tempted to move it out into this function: the handler contract is one
-  // output enqueued per invocation, so a handler-based filter has no way to emit zero
-  // outputs for an input. Only the core can decide per-item whether anything reaches
-  // the output queue.
+  // Filter is sugar over an automaticallyEmit: false stage: run the predicate, emit the
+  // item only when it passes (zero or one output per input — something a normal
+  // auto-emit handler, which emits exactly one, cannot express, and the reason filtering
+  // once lived in the core loop). The handler returns the item regardless of the verdict
+  // so the stage's push receipt resolves with the item itself, matching the documented
+  // filter-receipt contract; the predicate's boolean drives only the emit. An async
+  // predicate defers the emit until it settles.
   function filter(
     handler: FilterHandler<OutputItem>,
     config: Config = {},
   ): Streamie<OutputItem, OutputItem> {
     const nextStreamie = streamie(
-      handler as Handler<OutputItem, unknown>,
-      { ...withInheritedDefaults(config), isFilter: true } as InternalConfig,
+      (item: OutputItem, tools: Tools<OutputItem>) => {
+        const passed = handler(item, tools);
+        if (passed && typeof (passed as PromiseLike<boolean>).then === 'function') {
+          return (passed as Promise<boolean>).then((didPass) => {
+            if (didPass) tools.emit(item);
+            return item;
+          });
+        }
+        if (passed) tools.emit(item);
+        return item;
+      },
+      { ...withInheritedDefaults(config), automaticallyEmit: false },
     ) as unknown as Streamie<OutputItem, OutputItem>;
 
     registerOutput(nextStreamie);
@@ -687,15 +720,19 @@ export default function streamie<I, R>(
     return nextStreamie;
   }
 
-  // NOTE: flattening is implemented by the core process loop, not here. Don't be
-  // tempted to move it out into this function: emitting multiple outputs per input
-  // requires writing to the output queue directly, which the one-output-per-invocation
-  // handler contract can't express; a handler-based flatten would need its own queue
-  // and drain handling.
+  // Flatten is sugar over an automaticallyEmit: false stage: emit each element of the
+  // (array) input individually — many outputs per input, which the one-output auto-emit
+  // contract can't express. The handler returns the pre-flatten array so the stage's
+  // receipt resolves with it (all the outputs the item produced). A non-array input
+  // throws, surfacing through the same handler-error path any thrown handler does.
   function flatten(config: Config = {}): Streamie<OutputItem, any> {
     const nextStreamie = streamie(
-      ((item: OutputItem) => item) as Handler<OutputItem, unknown>,
-      { ...withInheritedDefaults(config), flatten: true } as InternalConfig,
+      (items: OutputItem, tools: Tools<OutputItem>) => {
+        if (!Array.isArray(items)) throw new Error('Cannot flatten output that is not an array.');
+        for (let i = 0; i < items.length; i++) tools.emit(items[i]);
+        return items;
+      },
+      { ...withInheritedDefaults(config), automaticallyEmit: false },
     ) as unknown as Streamie<OutputItem, any>;
 
     registerOutput(nextStreamie);
@@ -703,7 +740,129 @@ export default function streamie<I, R>(
     return nextStreamie;
   }
 
-  // TODO add reduce, flatMap, etc.
+  // The typed, named face of the automaticallyEmit: false stage: the handler is handed
+  // tools.emit and produces as many (or as few) outputs as it likes, whenever it likes,
+  // while its return value feeds only the push receipt. map (one output), filter (zero or
+  // one), and flatten (one per array element) are all specializations of this; produce is
+  // the general form for the cases they don't cover (e.g. fanning one input out to a
+  // variable number of outputs without first materializing them into an array). The output
+  // type NO is the caller's to supply — an explicit type argument (`.produce<NO>(…)`) or an
+  // annotation on the emit parameter — since TypeScript can't read it out of the emit()
+  // calls in the body; left unsupplied it is unknown. NR (the return/receipt type) is
+  // inferred from the return value.
+  function produce<NO, NR = unknown>(
+    handler: (input: OutputItem, tools: Tools<OutputItem, NO>) => MaybePromise<NR>,
+    config: Config = {},
+  ): Streamie<OutputItem, NO, Awaited<NR>> {
+    const nextStreamie = streamie<OutputItem, NO, NR>(
+      handler,
+      { ...withInheritedDefaults(config), automaticallyEmit: false },
+    );
+
+    registerOutput(nextStreamie as unknown as Streamie<OutputItem, any>);
+
+    return nextStreamie;
+  }
+
+  // Running reduce ("prefix scan"): thread an accumulator through the stream, emitting the
+  // new accumulator after every item. An ordinary auto-emit stage whose handler closes
+  // over the accumulator; concurrency is forced to 1 because the fold is inherently
+  // sequential — each invocation reads the accumulator the previous one wrote. An async
+  // reducer is awaited (the next item waits, per concurrency 1) before its result becomes
+  // the accumulator; a synchronous reducer keeps the synchronous fast path. The push
+  // receipt for an item resolves with the accumulator after that item was folded in.
+  function scan<A>(
+    reducer: (accumulator: A, item: OutputItem) => MaybePromise<A>,
+    initialValue: A,
+    config: Config = {},
+  ): Streamie<OutputItem, A> {
+    let acc = initialValue;
+    const nextStreamie = streamie(
+      (item: OutputItem) => {
+        const next = reducer(acc, item);
+        if (next && (typeof (next as PromiseLike<A>).then === 'function')) {
+          return (next as Promise<A>).then((resolved) => (acc = resolved));
+        }
+        return (acc = next as A);
+      },
+      { ...withInheritedDefaults(config), concurrency: 1 },
+    );
+
+    registerOutput(nextStreamie as unknown as Streamie<OutputItem, any>);
+
+    // The cast collapses Awaited<A> back to A: the accumulator is a settled value by
+    // construction (an async reducer's promise is awaited before it becomes the
+    // accumulator), but TS can't reduce Awaited over the unresolved generic.
+    return nextStreamie as unknown as Streamie<OutputItem, A>;
+  }
+
+  // Aggregate the whole stream to a single value: thread an accumulator through every item
+  // and emit it exactly once, when the stream drains — including emitting the untouched
+  // initialValue for a stream that produced no items at all (matching reduce-with-seed over
+  // an empty input). Like scan, the fold is sequential, so concurrency is 1.
+  //
+  // The single output has to be flushed in the narrow window after the last input is folded
+  // in but before the streamie reports itself drained, which is the same "flush on drain"
+  // need that keeps batching in the core loop. Rather than add a second core path, reduce
+  // builds on the existing stable emit primitive (exposed as _emit) and detects that window
+  // from two sides: the per-item check fires when the final item settles while draining (the
+  // asynchronous case, where draining begins with items still queued), and the onDraining
+  // subscription fires when draining begins with nothing left to process (the synchronous
+  // case, where every item was already folded before the drain cascaded down, and the
+  // empty-stream case, where no item ran at all). flush is idempotent, so the two paths
+  // never double-emit.
+  function reduce<A>(
+    reducer: (accumulator: A, item: OutputItem) => MaybePromise<A>,
+    initialValue: A,
+    config: Config = {},
+  ): Streamie<OutputItem, A> {
+    let acc = initialValue;
+    let draining = false;
+    let emitted = false;
+
+    const flush = () => {
+      if (emitted) return;
+      emitted = true;
+      nextStreamie._emit(acc);
+    };
+
+    // Called once an item has been folded in. With concurrency 1 this invocation is the
+    // only one in flight, so an empty input queue means it was the last item; and once
+    // draining no further items can arrive (the source is done, pushes are refused), so a
+    // zero here is final rather than a transient lull.
+    const tryFlushAfterItem = () => {
+      if (draining && (nextStreamie.state.count.queued.input === 0)) flush();
+    };
+
+    const nextStreamie = streamie<OutputItem, A, A>(
+      (item) => {
+        const next = reducer(acc, item);
+        if (next && (typeof (next as PromiseLike<A>).then === 'function')) {
+          return (next as Promise<A>).then((resolved) => {
+            acc = resolved;
+            tryFlushAfterItem();
+            return acc;
+          });
+        }
+        acc = next as A;
+        tryFlushAfterItem();
+        return acc;
+      },
+      { ...withInheritedDefaults(config), automaticallyEmit: false, concurrency: 1 },
+    );
+
+    nextStreamie.onDraining(() => {
+      draining = true;
+      // Nothing queued and nothing in flight: every item was folded before the drain
+      // reached us (or there were none), so emit the accumulator now.
+      if ((nextStreamie.state.count.queued.input === 0) && (nextStreamie.state.count.handling === 0)) flush();
+    });
+
+    registerOutput(nextStreamie as unknown as Streamie<OutputItem, any>);
+
+    // See the note on scan: the accumulator is settled, so Awaited<A> is A.
+    return nextStreamie as unknown as Streamie<OutputItem, A>;
+  }
 
   function pause(shouldPause?: boolean) {
     state.isPaused = shouldPause ?? !state.isPaused;
@@ -741,7 +900,7 @@ export default function streamie<I, R>(
   // This registers an input streamie, so that this streamie can be triggered to drain
   // (or, when every input aborted, to abort) once all of its input streamies have
   // terminated.
-  function registerInput(inputStreamie: Streamie<any, I>) {
+  function registerInput(inputStreamie: Streamie<any, I, any>) {
     if (state.isDrained) throw new Error('Cannot register an input on a drained streamie.');
     if (inputStreamie.state.isDrained) throw new Error('Cannot register a drained streamie as an input.');
     if (state.isHalted) throw new Error('Cannot register an input on a halted streamie.');
@@ -777,7 +936,7 @@ export default function streamie<I, R>(
     abort(errors.length > 1 ? new AggregateError(errors, 'All input streamies aborted.') : errors[0]);
   }
 
-  function registerOutput(outputStreamie: Streamie<OutputItem, any>) {
+  function registerOutput(outputStreamie: Streamie<OutputItem, any, any>) {
     // A sink is a declared endpoint: its outputs are discarded as they settle (they
     // never reach an output queue), so a consumer of one could only ever observe
     // nothing. Refusing the registration outright beats silently delivering nothing.
@@ -882,6 +1041,9 @@ export default function streamie<I, R>(
     filter,
     batch,
     flatten,
+    produce,
+    reduce,
+    scan,
     sink,
 
     pause,
@@ -948,6 +1110,11 @@ export default function streamie<I, R>(
 
     _pushQueueError,
     _receive,
+    // The stable emit primitive, exposed so drain-flush combinators (reduce) can append a
+    // final output from outside a handler invocation — including when no handler ever ran
+    // (an empty stream's seed). Not part of the public surface; like _receive it injects
+    // into this streamie's queues and should not be called for any other reason.
+    _emit: emit,
 
     // The reason this is a getter is because most streamies in a pipeline will not
     // actually be awaited, most likely just the last one. If we create promises
@@ -963,7 +1130,7 @@ export default function streamie<I, R>(
         ref.internalPromise.then(() => resolve(null)).catch(reject);
       });
     },
-  } as unknown as Streamie<I, OutputItem>;
+  } as unknown as Streamie<I, OutputItem, any>;
 
   if (config.seed !== undefined) setTimeout(() => {
     if (state.isDrained) return;
@@ -972,6 +1139,8 @@ export default function streamie<I, R>(
 
   return self;
 }
+
+export default streamie;
 
 // The stream bridges live in opt-in entries, not here: the WHATWG bridges in
 // 'streamie/web' (which assumes a web-stream type environment) and the node:stream

@@ -152,6 +152,75 @@ items
   });
 ```
 
+## Aggregating: `.reduce` and `.scan`
+
+`.reduce` folds the whole stream into a single value, emitted once when the stream drains —
+the streaming counterpart of `Array.prototype.reduce`:
+
+```ts
+const total = items
+  .reduce((acc, item) => acc + item.amount, 0)
+  .each((sum) => report(sum)); // Fires once, with the final total.
+```
+
+The reducer may be async (it is awaited before its result becomes the accumulator), and the
+fold is sequential regardless of any `concurrency` you set, since each step reads what the
+previous one wrote. A stream that produces no items still emits the initial value, matching
+`reduce`-with-seed over an empty array.
+
+`.scan` is a running reduce: it threads the same accumulator through the stream but emits it
+after *every* item, so an N-item stream yields N outputs — the running totals:
+
+```ts
+items
+  .scan((acc, item) => acc + item.amount, 0)
+  .each((runningTotal) => updateGauge(runningTotal));
+```
+
+An empty stream emits nothing from `.scan`.
+
+## Producing: `.produce`
+
+`.map` emits exactly one output per input, `.filter` zero or one, `.flatten` one per array
+element. `.produce` is the general case: the handler is handed an `emit` and produces as many
+(or as few) outputs as it likes, whenever it likes, while its return value feeds only the push
+receipt. Reach for it to fan one input out to a variable number of outputs without first
+materializing them into an array:
+
+```ts
+source
+  .produce<string>((line, { emit }) => {
+    for (const token of tokenize(line)) emit(token);
+  })
+  .each((token) => index(token));
+```
+
+Because TypeScript cannot read the output type out of the `emit()` calls in the body, supply
+it with an explicit type argument (`.produce<Token>(…)`) or by annotating the `emit`
+parameter (`(line, { emit }: Tools<string, Token>) => …`); the latter also keeps the receipt
+type precise. (`.produce(handler)` is exactly `.map(handler, { automaticallyEmit: false })`,
+with a name that says what it is for.)
+
+Most interesting `.produce` stages are stateful — windowing, dynamic batching, dedup,
+emit-on-threshold. There is no built-in scratchpad: a handler is a closure, so keep the state
+in the surrounding scope and the stage carries it across invocations on its own:
+
+```ts
+const acc = { sum: 0 };
+source
+  .produce<number>((item, { emit }) => {
+    acc.sum += item;
+    if (acc.sum > 100) { emit(acc.sum); acc.sum = 0; } // Emit a running window, then reset.
+  });
+```
+
+This deliberately keeps the state visible rather than hiding it behind the API, because shared
+mutable state and `concurrency` are in tension: at `concurrency: 1` (the default) the
+invocations are sequential and the accumulator is safe, but raise the concurrency and that
+same `acc` is shared across in-flight invocations — which is now plainly your call to reason
+about. (When the aggregation is a strict left fold, prefer `.reduce`/`.scan`, which own the
+accumulator and force sequential execution for you.)
+
 ## Concurrency
 
 Pass `concurrency` to any stage that should process more than one item at a time:
@@ -608,8 +677,10 @@ configured size is exactly `n`. An unbatched streamie reports `false` for every 
 ## TypeScript
 
 Types follow the item shape through the pipeline. `.map` uses the handler return type,
-`.filter` keeps the same item type, `.batch(n)` emits arrays, and `.flatten()` unwraps array
-items. Most chains infer without annotations. If you do need to specify types explicitly,
+`.filter` keeps the same item type, `.batch(n)` emits arrays, `.flatten()` unwraps array
+items, and `.reduce`/`.scan` emit the accumulator type. Most chains infer without
+annotations. `.produce` is the exception: its output type cannot be read out of the `emit()`
+calls, so supply it explicitly (see Producing). If you do need to specify types explicitly,
 the generics are the input item type and the handler return type:
 
 ```ts
@@ -631,10 +702,9 @@ elements individually.
     delivery to the fast ones rather than each branch draining at its own rate. This keeps any
     single branch from growing an unbounded queue, but a per-consumer buffering strategy is
     not yet configurable (see Branching).
-  - **No `reduce` or `flatMap` yet.** The current combinators are `.map`, `.filter`, `.batch`,
-    `.flatten`, `.each`, and `.sink`. Aggregation and map-then-flatten are expressible by
-    composing these (e.g. `.map(...).flatten()`), but dedicated operators are not yet
-    provided.
+  - **No `flatMap` yet.** Map-then-flatten is expressible by composing `.map(...).flatten()`,
+    but a single fused operator is not yet provided. (Aggregation is covered by `.reduce` and
+    `.scan`, and arbitrary fan-out by `.produce`.)
 
 # Migrating from 1.x
 
