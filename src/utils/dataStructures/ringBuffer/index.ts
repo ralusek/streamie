@@ -7,7 +7,7 @@
  * element, making each dequeue O(queue length). A streamie whose input queue gets
  * deep (e.g. a large synchronous push backlog) then pays quadratic total cost just
  * to move items through. The ring buffer dequeues in O(1): read a slot, clear it,
- * advance a cursor. Nothing else moves. (Measured: benchmark/queue-backlog.js.)
+ * advance a cursor. Nothing else moves. (Measured: benchmark/queue-backlog.cjs.)
  *
  * Why not a linked list? Same O(1) dequeue, but a linked list allocates a node
  * object per item — pure GC churn on a hot path that can see millions of items —

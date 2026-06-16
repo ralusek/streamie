@@ -1,10 +1,10 @@
 // Types
 import type { Readable } from 'node:stream';
-import type { Streamie } from '../../../types';
+import type { Streamie } from '../../../types.js';
 
 // Utils
-import waitForCapacity from '../waitForCapacity';
-import type { Unsubscribe } from '../../events';
+import waitForCapacity from '../waitForCapacity.js';
+import type { Unsubscribe } from '../../events/index.js';
 
 // The Node mirror of pumpReadableStream: pumps a node:stream Readable into a streamie,
 // reading chunks and pushing them, pausing on the receipt's backpressure signal so the

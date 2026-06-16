@@ -1,6 +1,6 @@
 // Types
-import { StreamieQueueError } from './error';
-import {
+import { StreamieQueueError } from './error/index.js';
+import type {
   Streamie,
   Handler,
   FilterHandler,
@@ -10,18 +10,18 @@ import {
   MaybePromise,
   Tools,
   StreamieHaltPayload,
-} from './types';
+} from './types.js';
 
 // Validation
-import * as validate from './validation';
+import * as validate from './validation/index.js';
 
 // Data structures
-import RingBuffer from './utils/dataStructures/ringBuffer';
-import createAsyncIterator from './utils/asyncIterator';
-import createEventHandlers, { event, type Unsubscribe } from './utils/events';
-import PushReceipt from './utils/pushReceipt';
-import yieldToMacrotask from './utils/yieldToMacrotask';
-import currentSliceAge from './utils/eventLoopSlice';
+import RingBuffer from './utils/dataStructures/ringBuffer/index.js';
+import createAsyncIterator from './utils/asyncIterator/index.js';
+import createEventHandlers, { event, type Unsubscribe } from './utils/events/index.js';
+import PushReceipt from './utils/pushReceipt/index.js';
+import yieldToMacrotask from './utils/yieldToMacrotask/index.js';
+import currentSliceAge from './utils/eventLoopSlice/index.js';
 
 type TimeoutId = ReturnType<typeof setTimeout>;
 
@@ -98,7 +98,7 @@ function streamieInternal<I, R>(
     // Ring buffers rather than plain arrays: dequeuing from an array via
     // shift/splice reindexes every remaining element, which goes quadratic when a
     // queue gets deep (see the rationale in the RingBuffer header and the numbers
-    // in benchmark/queue-backlog.js).
+    // in benchmark/queue-backlog.cjs).
     input: new RingBuffer(),
     receipt: null,
     output: {

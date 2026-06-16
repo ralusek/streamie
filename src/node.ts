@@ -17,15 +17,15 @@
 
 // Types
 import type { Readable } from 'node:stream';
-import type { Streamie, Config } from './types';
+import type { Streamie, Config } from './types.js';
 
 // The streamie factory and the bridge implementations. Importing the factory from the
 // main entry is safe here precisely because the dependency runs one way: the main entry
 // never imports this module, so there is no cycle (which is also why fromReadable can
 // build its streamie inline rather than splitting a pump out, the way fromReadableStream
 // must to avoid one).
-import streamie from './index';
-import pumpReadable from './utils/streams/node/fromReadable';
+import streamie from './index.js';
+import pumpReadable from './utils/streams/node/fromReadable.js';
 
 // Creates a streamie fed by a node:stream Readable. Items flow under backpressure (the
 // stream is only consumed as fast as the pipeline absorbs items, bounded by
@@ -52,11 +52,11 @@ export function fromReadable<T = unknown>(
 // streamie draining ends the stream; an abort or halt errors it; the consumer
 // destroying the stream detaches it from the streamie as a voluntary departure (no
 // upstream cascade), the same as breaking a for-await.
-export { default as toReadable } from './utils/streams/node/toReadable';
+export { default as toReadable } from './utils/streams/node/toReadable.js';
 
 // Pipes a streamie's outputs into a node:stream Writable, resolving once the streamie
 // has drained and the sink has finished. A streamie abort/halt destroys the sink; a
 // sink failure aborts the streamie; either way the returned promise rejects with the
 // terminating error. Backpressure flows through write()'s return value and the async
 // iterator.
-export { default as toWritable } from './utils/streams/node/toWritable';
+export { default as toWritable } from './utils/streams/node/toWritable.js';

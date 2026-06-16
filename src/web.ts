@@ -17,14 +17,14 @@
 // pipeThrough) accept it directly.
 
 // Types
-import type { Streamie, Config } from './types';
+import type { Streamie, Config } from './types.js';
 
 // The streamie factory and the bridge implementations. Importing the factory from the
 // core entry is safe here because the dependency runs one way: the core never imports
 // this module, so there is no cycle (which is also why fromReadableStream can build its
 // streamie inline rather than splitting a pump out, the way it would to avoid one).
-import streamie from './index';
-import pumpReadableStream from './utils/streams/readable';
+import streamie from './index.js';
+import pumpReadableStream from './utils/streams/readable/index.js';
 
 // Creates a streamie fed by a WHATWG ReadableStream. Items flow under backpressure (the
 // stream is only pulled as fast as the pipeline absorbs items, bounded by
@@ -53,7 +53,7 @@ export function fromReadableStream<T>(
 // Pipes a streamie's outputs into a WHATWG WritableStream, resolving once the streamie
 // has drained and the sink has closed (pipeTo's contract). A streamie abort/halt aborts
 // the sink, a sink failure aborts the streamie, and either rejects the returned promise.
-export { default as toWritableStream } from './utils/streams/writable';
+export { default as toWritableStream } from './utils/streams/writable/index.js';
 
 // The mirror of fromReadableStream: exposes a streamie's outputs as a WHATWG
 // ReadableStream, pull-driven so the consumer's reads pace the pipeline. The streamie
@@ -61,4 +61,4 @@ export { default as toWritableStream } from './utils/streams/writable';
 // and the consumer cancelling the stream detaches it from the streamie as a voluntary
 // departure (no upstream cascade), the same as breaking a for-await. An optional queuing
 // strategy tunes the produced stream's read-ahead (default high water mark 1).
-export { default as toReadableStream } from './utils/streams/readable/toReadableStream';
+export { default as toReadableStream } from './utils/streams/readable/toReadableStream.js';

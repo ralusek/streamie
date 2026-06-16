@@ -1,6 +1,6 @@
-import streamie from '../dist';
-import type { Streamie, StreamieHaltPayload, Tools } from '../dist/types';
-import type { StreamieQueueError } from '../dist/error';
+import streamie from '../dist/esm/index.js';
+import type { Streamie, StreamieHaltPayload, Tools } from '../dist/esm/types.js';
+import type { StreamieQueueError } from '../dist/esm/error/index.js';
 
 /*
   Run this with tsc, not Jest alone.

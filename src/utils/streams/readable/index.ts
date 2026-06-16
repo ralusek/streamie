@@ -1,9 +1,9 @@
 // Types
-import type { Streamie } from '../../../types';
+import type { Streamie } from '../../../types.js';
 
 // Utils
-import waitForCapacity from '../waitForCapacity';
-import type { Unsubscribe } from '../../events';
+import waitForCapacity from '../waitForCapacity.js';
+import type { Unsubscribe } from '../../events/index.js';
 
 // Pumps a WHATWG ReadableStream into a streamie: reads chunks and pushes them,
 // pausing on the receipt's backpressure signal so the stream is only pulled as fast

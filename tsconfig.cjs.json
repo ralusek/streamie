@@ -1,0 +1,25 @@
+{
+  // The CommonJS build. tsc decides ESM-vs-CJS emit from `module`, so this is the one
+  // knob that differs from the ESM build: `module: CommonJS` rewrites the ESM source
+  // (including its `.js` import specifiers, which require() handles fine) into CJS.
+  //
+  // moduleResolution is "bundler" rather than the classic "node10": node10 is deprecated
+  // in TypeScript 6 (removed in 7), while bundler resolves the source's `.js` specifiers
+  // to their `.ts` files without complaint. The looser bundler semantics are immaterial
+  // here — the package has no runtime dependencies, so build-time resolution only ever
+  // touches relative imports (which we emit and which exist post-build) and node:
+  // builtins, both of which resolve identically under Node's CJS runtime.
+  //
+  // The output lands in dist/cjs, which the build then stamps with a {"type":"commonjs"}
+  // package.json so Node treats those .js files as CommonJS even though the root package
+  // is type:module (see scripts/postbuild.mjs).
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "bundler",
+    "outDir": "./dist/cjs",
+    "rootDir": "./src"
+  },
+  "include": ["src"],
+  "exclude": ["node_modules", "**/*.test.ts"]
+}

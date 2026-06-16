@@ -1,5 +1,5 @@
-import { fromReadableStream, toReadableStream, toWritableStream } from '../dist/web';
-import type { Streamie } from '../dist/types';
+import { fromReadableStream, toReadableStream, toWritableStream } from '../dist/esm/web.js';
+import type { Streamie } from '../dist/esm/types.js';
 
 /*
   Compiled against the DOM lib (tsconfig.dom-type-tests.json), unlike the core type
@@ -35,10 +35,13 @@ export type Bridged_NotAny = Expect<NotAny<typeof bridged>>;
 // The bridge accepts preventCancel alongside its core config subset.
 fromReadableStream(numberReadable, { backpressureAt: 8, preventCancel: true });
 
-// The motivating case: a fetch response body bridges directly.
+// The motivating case: a fetch response body bridges directly. The chunk type flows
+// through verbatim: since TypeScript 5.7 the typed arrays are generic over their backing
+// buffer, and lib.dom types Response.body as ReadableStream<Uint8Array<ArrayBuffer>>, so
+// the exact element type — buffer parameter and all — is what the bridge carries through.
 declare const response: Response;
 const body = fromReadableStream(response.body!);
-export type Body_Items = Expect<Equal<typeof body, Streamie<Uint8Array, Uint8Array>>>;
+export type Body_Items = Expect<Equal<typeof body, Streamie<Uint8Array<ArrayBuffer>, Uint8Array<ArrayBuffer>>>>;
 
 // toWritableStream resolves void; the sink's chunk type must match the streamie output.
 const piped = toWritableStream(bridged, numberWritable);

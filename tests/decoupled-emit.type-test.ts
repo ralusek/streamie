@@ -1,5 +1,5 @@
-import streamie from '../dist';
-import type { Streamie, Tools, Config } from '../dist/types';
+import streamie from '../dist/esm/index.js';
+import type { Streamie, Tools, Config } from '../dist/esm/types.js';
 
 /*
   Run with tsc, not Jest (see test:types). Asserts the typing of the decoupled-output

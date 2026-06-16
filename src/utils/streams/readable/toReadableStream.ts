@@ -1,5 +1,5 @@
 // Types
-import type { Streamie } from '../../../types';
+import type { Streamie } from '../../../types.js';
 
 // Exposes a streamie's outputs *as* a WHATWG ReadableStream — the outbound source
 // bridge, the mirror image of pumpReadableStream (which feeds a stream *into* a

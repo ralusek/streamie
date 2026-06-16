@@ -1,4 +1,4 @@
-import yieldToMacrotask from '../yieldToMacrotask';
+import yieldToMacrotask from '../yieldToMacrotask/index.js';
 
 // Measures how long the current event-loop "slice" — the stretch of synchronous and
 // microtask execution since the last macrotask boundary — has been running. This is

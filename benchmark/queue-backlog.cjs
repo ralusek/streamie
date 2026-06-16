@@ -10,19 +10,19 @@
  *    dequeue structure the depth shouldn't matter.
  *
  *  - steady: items are pumped in respecting input backpressure (the same feed
- *    pattern as fused-vs-composed.js), so queues stay shallow. This arm exists
+ *    pattern as fused-vs-composed.cjs), so queues stay shallow. This arm exists
  *    as a regression check: a queue swap must not slow down the common case.
  *
  * Each run reports a checksum (output count and sum) so that an implementation
  * change that corrupts ordering or drops items shows up as a checksum mismatch
  * rather than a fast-but-wrong timing.
  *
- * Usage: node benchmark/queue-backlog.js
+ * Usage: node benchmark/queue-backlog.cjs
  * Env overrides: N (default 100000), REPS (default 5), STREAMIE_DIST
  */
 
 // STREAMIE_DIST lets you point at an alternate build (e.g. the pre-change dist).
-const streamie = require(process.env.STREAMIE_DIST || '../dist').default;
+const streamie = require(process.env.STREAMIE_DIST || '../dist/cjs').default;
 
 const N = Number(process.env.N) || 100_000;
 const REPS = Number(process.env.REPS) || 5;
@@ -99,7 +99,7 @@ function median(xs) {
 }
 
 (async () => {
-  console.log(`streamie build: ${process.env.STREAMIE_DIST || '../dist'}`);
+  console.log(`streamie build: ${process.env.STREAMIE_DIST || '../dist/cjs'}`);
   console.log(`n=${N}, reps=${REPS}\n`);
 
   for (const [label, run] of [['backlog', runBacklog], ['steady', runSteady]]) {

@@ -1,22 +1,16 @@
 {
+  // The default config: the ESM build, and what editors/`tsc --noEmit` pick up. Source
+  // is authored in NodeNext style (explicit `.js` extensions on every relative import),
+  // so this is also the config that validates those specifiers.
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "target": "es2020",
-    // Type-only libs (emitted output is still governed by target):
-    //   ES2021 — WeakRef (used by tests/collectability.test.ts).
-    //   DOM    — the WHATWG stream globals (ReadableStream/WritableStream/
-    //            QueuingStrategy) that the 'streamie/web' entry (src/web.ts) types
-    //            against. Only web.ts and the bridge impls reference them; the core
-    //            uses none, and its lib-agnosticism is proven separately by the
-    //            ES2021-only type-tests (tsconfig.type-tests.json).
-    "lib": ["ES2021", "DOM"],
-    "module": "commonjs",
-    "declaration": true,
-    "outDir": "./dist",
-    "strict": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": "./dist/esm",
+    "rootDir": "./src"
   },
   "include": ["src"],
-  "exclude": ["node_modules", "**/*.test.ts"]
+  // src/index.cts is the CommonJS-only entry shim; it belongs to the CJS build
+  // (tsconfig.cjs.json) and must not emit a stray .cjs into the ESM output here.
+  "exclude": ["node_modules", "**/*.test.ts", "**/*.cts"]
 }

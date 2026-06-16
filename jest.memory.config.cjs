@@ -1,4 +1,4 @@
-const base = require('./jest.config');
+const base = require('./jest.config.cjs');
 
 // Memory tests only — run via `npm run test:memory`, which provides --expose-gc so
 // the tests can force collection deterministically, and --runInBand so their mass

@@ -1,5 +1,5 @@
-import { StreamieQueueError } from './error';
-import type { Subscribe, Unsubscribe } from './utils/events';
+import type { StreamieQueueError } from './error/index.js';
+import type { Subscribe, Unsubscribe } from './utils/events/index.js';
 
 export type { Subscribe, Unsubscribe };
 

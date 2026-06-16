@@ -1,6 +1,6 @@
 // Types
 import type { Writable } from 'node:stream';
-import type { Streamie } from '../../../types';
+import type { Streamie } from '../../../types.js';
 
 // Pipes a streamie's outputs into a node:stream Writable — the Node mirror of
 // toWritableStream — resolving once the streamie has drained and the sink has finished.

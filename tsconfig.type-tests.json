@@ -1,16 +1,18 @@
 {
-  "extends": "./tsconfig.json",
+  // Compile-only type tests for the core and the node bridges, run against the *built*
+  // declarations in dist/esm (so they validate the published types, not the source).
+  // They extend the base directly and pin lib to ES2022 with NO DOM: that absence is the
+  // point — it proves the core needs no web-stream type environment. The web bridges'
+  // type tests, which do need the WHATWG globals, run separately under
+  // tsconfig.dom-type-tests.json.
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "noEmit": true,
-    "strict": true,
-    // Override the build's lib to drop DOM: these tests cover the core and the
-    // node bridges, and pinning them to ES2021 is what proves the core needs no
-    // web-stream type environment. The web bridges' type tests, which do need the
-    // WHATWG globals, run separately under tsconfig.dom-type-tests.json.
-    "lib": ["ES2021"]
+    "lib": ["ES2022"]
   },
   "include": [
-    "test/**/*.type-test.ts",
     "tests/**/*.type-test.ts"
   ],
   "exclude": [

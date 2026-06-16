@@ -1,5 +1,5 @@
-import { fromReadable, toReadable, toWritable } from '../src/node';
-import type { Streamie } from '../src/types';
+import { fromReadable, toReadable, toWritable } from '../src/node.js';
+import type { Streamie } from '../src/types.js';
 import type { Readable } from 'node:stream';
 
 /*

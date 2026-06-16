@@ -1,6 +1,6 @@
 // Types
 import type { ReadableOptions } from 'node:stream';
-import type { Streamie } from '../../../types';
+import type { Streamie } from '../../../types.js';
 
 // Construction side
 import { Readable } from 'node:stream';

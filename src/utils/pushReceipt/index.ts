@@ -1,5 +1,5 @@
 // Types
-import type { PushReceipt as PublicPushReceipt } from '../../types';
+import type { PushReceipt as PublicPushReceipt } from '../../types.js';
 
 // Settlement states. Numeric rather than string for cheap comparison on a path that
 // runs once per externally pushed item.

@@ -2,37 +2,68 @@
   "name": "streamie",
   "version": "2.0.0",
   "description": "Library for processing data using common array behaviors.",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "type": "module",
+  "main": "./dist/cjs/index.cjs",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/cjs/index.d.cts",
+  "typesVersions": {
+    "*": {
+      "web": ["./dist/cjs/web.d.ts"],
+      "node": ["./dist/cjs/node.d.ts"]
+    }
+  },
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
+      "import": {
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.cts",
+        "default": "./dist/cjs/index.cjs"
+      }
     },
     "./web": {
-      "types": "./dist/web.d.ts",
-      "default": "./dist/web.js"
+      "import": {
+        "types": "./dist/esm/web.d.ts",
+        "default": "./dist/esm/web.js"
+      },
+      "require": {
+        "types": "./dist/cjs/web.d.ts",
+        "default": "./dist/cjs/web.js"
+      }
     },
     "./node": {
-      "types": "./dist/node.d.ts",
-      "default": "./dist/node.js"
+      "import": {
+        "types": "./dist/esm/node.d.ts",
+        "default": "./dist/esm/node.js"
+      },
+      "require": {
+        "types": "./dist/cjs/node.d.ts",
+        "default": "./dist/cjs/node.js"
+      }
     },
     "./package.json": "./package.json"
   },
   "files": [
-    "dist"
+    "dist",
+    "src"
   ],
   "sideEffects": false,
   "engines": {
     "node": ">=18"
   },
   "scripts": {
-    "build": "tsc",
+    "clean": "node scripts/clean.mjs",
+    "build:esm": "tsc -p tsconfig.json",
+    "build:cjs": "tsc -p tsconfig.cjs.json",
+    "build": "npm run clean && npm run build:esm && npm run build:cjs && node scripts/postbuild.mjs",
     "prepublishOnly": "npm run build",
-    "bench": "node --expose-gc benchmark/fused-vs-composed.js",
+    "bench": "node --expose-gc benchmark/fused-vs-composed.cjs",
+    "pretest": "npm run build",
     "test": "node --max-old-space-size=8192 ./node_modules/.bin/jest",
-    "test:types": "tsc -p tsconfig.type-tests.json --noEmit && tsc -p tsconfig.dom-type-tests.json --noEmit",
-    "test:memory": "node --expose-gc --max-old-space-size=8192 ./node_modules/.bin/jest --config jest.memory.config.js --runInBand"
+    "test:types": "npm run build && tsc -p tsconfig.type-tests.json --noEmit && tsc -p tsconfig.dom-type-tests.json --noEmit",
+    "test:memory": "node --expose-gc --max-old-space-size=8192 ./node_modules/.bin/jest --config jest.memory.config.cjs --runInBand"
   },
   "repository": {
     "type": "git",
@@ -63,10 +94,10 @@
   "author": "Tomas Savigliano <ralusek@gmail.com>",
   "license": "MIT",
   "devDependencies": {
-    "@types/jest": "^29.5.1",
-    "@types/node": "^18.16.3",
-    "jest": "^29.5.0",
-    "ts-jest": "^29.1.0",
-    "typescript": "^5.6.2"
+    "@types/jest": "^30.0.0",
+    "@types/node": "^25.9.3",
+    "jest": "^30.4.2",
+    "ts-jest": "^29.4.11",
+    "typescript": "^6.0.3"
   }
 }

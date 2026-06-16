@@ -21,12 +21,12 @@
  * plain array and letting it grow unboundedly would measure splice() shifting
  * costs instead of pipeline overhead.
  *
- * Usage: node --expose-gc benchmark/fused-vs-composed.js
+ * Usage: node --expose-gc benchmark/fused-vs-composed.cjs
  * Env overrides: N_SYNC (default 500000), N_ASYNC (default 50000), REPS (default 5)
  */
 
 // STREAMIE_DIST lets you point at an alternate build (e.g. a different tsc target).
-const streamie = require(process.env.STREAMIE_DIST || '../dist').default;
+const streamie = require(process.env.STREAMIE_DIST || '../dist/cjs').default;
 
 const BATCH_SIZE = 10;
 const N_SYNC = Number(process.env.N_SYNC) || 500_000;

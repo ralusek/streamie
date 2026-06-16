@@ -1,6 +1,6 @@
 // Types
-import type { Streamie } from '../../types';
-import type { Unsubscribe } from '../events';
+import type { Streamie } from '../../types.js';
+import type { Unsubscribe } from '../events/index.js';
 
 // Resolves when a streamie can take another push: a backpressure release, or a
 // termination (draining/halted) — the latter so a paused producer observes the

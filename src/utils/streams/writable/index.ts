@@ -1,5 +1,5 @@
 // Types
-import type { Streamie } from '../../../types';
+import type { Streamie } from '../../../types.js';
 
 // Pipes a streamie's outputs into a WHATWG WritableStream, resolving once the
 // streamie has drained and the sink has closed — the same contract as

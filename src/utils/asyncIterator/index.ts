@@ -1,10 +1,10 @@
 // Types
-import type { StreamieQueueError } from '../../error';
-import type { Streamie } from '../../types';
+import type { StreamieQueueError } from '../../error/index.js';
+import type { Streamie } from '../../types.js';
 
 // Utils
-import RingBuffer from '../dataStructures/ringBuffer';
-import createEventHandlers, { event, Unsubscribe } from '../events';
+import RingBuffer from '../dataStructures/ringBuffer/index.js';
+import createEventHandlers, { event, type Unsubscribe } from '../events/index.js';
 
 export default function createAsyncIterator<OutputItem>(
   registerOutput: (outputStreamie: Streamie<OutputItem, any>) => void,

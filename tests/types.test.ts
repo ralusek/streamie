@@ -1,4 +1,4 @@
-import streamie from '../dist';
+import streamie from '../dist/cjs';
 
 function expectsNumber(value: number) {
   return value;
