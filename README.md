@@ -382,7 +382,9 @@ purely a throttle you control. `state.isPaused` reports the current setting.
 ## Push Receipts
 
 `push` takes a single item, is synchronous, and returns a receipt. The receipt's
-`.promise` resolves with the item's output once its handler invocation has settled:
+`.promise` resolves, once the item's handler invocation has settled, with the handler's
+**return value** — which for a plain `.map` is the one output it produced, but for the
+decoupled stages is distinct from what they emitted downstream (see the last bullet below):
 
 ```ts
 const doubled = streamie(async (input: number) => input * 2, {});
@@ -415,9 +417,13 @@ A few behaviors worth knowing:
     somewhere for outputs to go: on a consumer-less non-sink streamie, items past
     the output retention threshold are not processed until a consumer attaches —
     see Sinks.)
-  - A filter stage's receipt resolves with the item itself once it has been
-    processed, whether or not it passed the predicate; a batch stage's receipts each
-    resolve with the batch their item joined.
+  - A receipt resolves with the handler's return value, which equals the emitted output
+    only for a plain `.map`. The decoupled stages diverge: a `.filter` resolves with the
+    item itself whether or not it passed; a `.flatten` with the whole pre-flatten array
+    (every element it emitted); `.reduce`/`.scan` with the accumulator after that item; and
+    `.produce` (or a decoupled `.map`) with whatever the handler returned, independent of
+    what it emitted. A `.batch` stage's receipts each resolve with the batch their item
+    joined.
 
 ## Events
 

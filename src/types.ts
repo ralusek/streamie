@@ -38,13 +38,15 @@ export type Config = {
   // continuously this long (milliseconds; default 100). Pipelines doing real
   // asynchronous work yield naturally and never hit this.
   yieldAfter?: number;
-  // By default a stage produces one output per handler invocation: the handler's
-  // settled return value is emitted automatically. Set false to decouple output from
-  // return — the handler is handed an `emit` in its tools and produces as many (or as
-  // few) outputs as it likes, whenever it likes; the return value then feeds only the
-  // push receipt, not the pipeline. This is the primitive the filter and flatten
-  // combinators are built on (a conditional emit and a per-element emit, respectively).
-  automaticallyEmit?: boolean;
+  // NOTE: automaticallyEmit is deliberately NOT here. Decoupling output from the return
+  // value is a discriminant that must be a literal — the decoupled .map/streamie overloads
+  // (and .produce) select on a literal `automaticallyEmit: false`, while the runtime treats
+  // anything `!== false` as auto-emit. If it lived on the widenable Config, a Config-typed
+  // value carrying `automaticallyEmit: false` would widen the property to `boolean`, miss
+  // the literal-false overload, bind to the auto-emit overload (so the stage would be typed
+  // as producing its return value) yet run decoupled (dropping that return) — a silent
+  // type/runtime mismatch. Keeping it off Config means it can only arrive as an inline
+  // literal, which the overloads read correctly; the field lives on InternalConfig below.
 };
 
 export type BatchConfig = Config & {
@@ -62,6 +64,12 @@ export type BatchConfig = Config & {
 export type InternalConfig = Config & {
   batchSize?: number;
   maxBatchWait?: number;
+  // When false, output is decoupled from the return value: the handler produces output via
+  // tools.emit and its return value feeds only the push receipt. Default true (one output
+  // per invocation, the return value). The decoupled .map/streamie overloads accept this as
+  // an inline literal and the filter/flatten/produce/reduce combinators set it internally;
+  // it is kept off the public Config so it can never be widened (see the note there).
+  automaticallyEmit?: boolean;
 };
 
 export type Tools<I, O = never> = {
@@ -118,12 +126,16 @@ export type PushReceipt<O> = {
   // onBackpressureRelease event.
   readonly backpressure: boolean;
 
-  // Resolves once the item's handler invocation has settled, with the output it
-  // produced: the handler's settled return value, or, for a filter stage, the item
-  // itself whether or not it passed — the promise signals "finished processing",
-  // not "produced output". Rejects with the StreamieQueueError if the invocation
-  // threw, or, if the streamie halts before the item is ever handled, with the
-  // halting error.
+  // Resolves once the item's handler invocation has settled, with the handler's settled
+  // RETURN value (the type parameter here is R, the stage's receipt type) — the promise
+  // signals "finished processing", and the value is whatever the handler returned, which
+  // is NOT in general what the stage emitted downstream. For a plain map the two coincide
+  // (the return is the one output). For the decoupled forms they diverge: a filter resolves
+  // with the item whether or not it passed, a flatten with the whole pre-flatten array
+  // (every element it emitted), reduce/scan with the accumulator after this item, and a
+  // produce / decoupled map with whatever the handler chose to return, independent of what
+  // it emitted. Rejects with the StreamieQueueError if the invocation threw, or, if the
+  // streamie halts before the item is ever handled, with the halting error.
   //
   // Created lazily on first access: an unobserved receipt allocates no promise and
   // can never produce an unhandled rejection when the pipeline errors.
@@ -175,12 +187,15 @@ export type Streamie<I, O, R = O> = {
     ): Streamie<O, NO, Awaited<NR>>;
     // Default: one output per invocation, the handler's settled return value — which is
     // therefore both the output and the receipt type (R defaults to O). The decoupled
-    // overload above is selected only by a literal automaticallyEmit: false, so this
-    // (which keeps automaticallyEmit at its plain Config type) catches everything else,
-    // including internal combinator calls passing a plain Config.
+    // overload above is selected only by a literal automaticallyEmit: false. This one
+    // rejects automaticallyEmit outright (?: never): a config value that structurally
+    // carries automaticallyEmit: false must not bind here (auto-emit typing) while running
+    // decoupled — with never it matches neither overload, surfacing as a compile error
+    // rather than a silent type/runtime mismatch. Decouple via the overload above or via
+    // .produce.
     <NR>(
       handler: Handler<O, NR>,
-      config?: Config,
+      config?: Config & { automaticallyEmit?: never },
     ): Streamie<O, Awaited<NR>>;
   };
 

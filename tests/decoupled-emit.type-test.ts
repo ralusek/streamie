@@ -1,5 +1,5 @@
 import streamie from '../dist';
-import type { Streamie, Tools } from '../dist/types';
+import type { Streamie, Tools, Config } from '../dist/types';
 
 /*
   Run with tsc, not Jest (see test:types). Asserts the typing of the decoupled-output
@@ -72,8 +72,26 @@ export type MappedSync_Output = Expect<Equal<OutputOf<typeof mappedSync>, string
 const mappedAsync = head.map(async (value) => value * 2);
 export type MappedAsync_Output = Expect<Equal<OutputOf<typeof mappedAsync>, number>>;
 
-const mappedExplicitTrue = head.map((value) => value > 0, { automaticallyEmit: true });
-export type MappedExplicitTrue_Output = Expect<Equal<OutputOf<typeof mappedExplicitTrue>, boolean>>;
+// Decoupling is selected only by an inline literal automaticallyEmit: false. It is not a
+// public Config field, so it cannot be carried in (and widened by) a Config-typed value —
+// which would otherwise type the stage as auto-emit while it runs decoupled.
+// @ts-expect-error automaticallyEmit is not part of the public Config
+const widenedDecouple: Config = { automaticallyEmit: false };
+
+// The structural case: an inferred object literal with a *real* Config property alongside
+// automaticallyEmit: false is still assignable to Config (extra properties are allowed for
+// a variable), so the auto-emit overload has to reject the discriminant explicitly. Both
+// .map and the factory must error rather than silently typing this as auto-emit.
+const smuggleConfig = { haltOnError: true, automaticallyEmit: false };
+// @ts-expect-error a config carrying automaticallyEmit: false matches neither overload
+head.map((value) => value * 2, smuggleConfig);
+// @ts-expect-error same for the streamie factory
+streamie((value: number) => value * 2, smuggleConfig);
+
+// And a plain Config (without it) still drives a normal auto-emit map.
+const plainConfig: Config = {};
+const mappedPlainConfig = head.map((value) => value > 0, plainConfig);
+export type MappedPlainConfig_Output = Expect<Equal<OutputOf<typeof mappedPlainConfig>, boolean>>;
 
 // ---------------------------------------------------------------------------
 // The decoupled factory form
@@ -114,13 +132,6 @@ streamie((value: number, { emit }) => {
   emit(value);
   return value;
 }, {});
-
-// An explicit automaticallyEmit: true is still an auto-emit handler — emit stays closed.
-head.map((value, { emit }) => {
-  // @ts-expect-error emit is unusable (never) in an auto-emit handler
-  emit(value);
-  return value;
-}, { automaticallyEmit: true });
 
 // ---------------------------------------------------------------------------
 // Receipt type (R) tracks the handler's RETURN value, distinct from output

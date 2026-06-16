@@ -40,32 +40,45 @@ function streamie<I, O, R = unknown>(
   config: Config & { automaticallyEmit: false; seed?: NoInfer<I> },
 ): Streamie<I, O, Awaited<R>>;
 // Default form: one output per invocation, inferred from the handler's return value.
-// automaticallyEmit is widened back to boolean here (not just true) so configs typed as
-// plain Config — every internal combinator call — still match: the decoupled overload
-// above is selected only by a *literal* false, which a boolean-typed property can't be.
+// automaticallyEmit is rejected here (?: never). It is not a public Config field, but a
+// config *variable* carrying other Config properties can structurally carry an
+// automaticallyEmit: false alongside them; binding such a value to this auto-emit overload
+// would type the stage as producing its return value while it actually runs decoupled
+// (dropping that return) — a silent type/runtime mismatch. never makes such a value match
+// NEITHER overload (a compile error) instead. Decoupling is reachable only through the
+// literal-false overload above (or the .produce combinator).
 function streamie<I, R>(
   handler: (input: I, tools: Tools<I>) => MaybePromise<R>,
   config?: Config & {
+    automaticallyEmit?: never;
     // When calling streamie directly, we allow a seed value to be passed.
     // NoInfer keeps seed from overpowering the handler parameter type.
     seed?: NoInfer<I>;
   },
 ): Streamie<I, Awaited<R>>;
-// Implementation signature (not visible to callers — they see the two overloads above).
-// emit is typed Tools<I, any> here, not the default Tools<I> (never): the impl signature
-// has to be compatible with BOTH overloads, and a handler accepting a never-emit Tools is
-// not assignable to one accepting the decoupled overload's typed emit. any bridges both.
-function streamie<I, R>(
+function streamie(handler: any, config: any = {}): any {
+  // Thin public wrapper: the overloads above enforce the automaticallyEmit discriminant for
+  // external callers, then hand off to the raw factory below. The combinators inside that
+  // factory call it directly, bypassing the discrimination, since they set batchSize and/or
+  // automaticallyEmit themselves through the unrestricted InternalConfig.
+  return streamieInternal(handler, config);
+}
+
+// The raw factory. Takes the unrestricted InternalConfig (batchSize/maxBatchWait/
+// automaticallyEmit) and is not exported; only the public `streamie` wrapper and the
+// internal combinators reach it. emit is typed Tools<I, any> so a handler from any of the
+// public overloads (never-emit or typed-emit) is assignable.
+function streamieInternal<I, R>(
   handler: (input: I, tools: Tools<I, any>) => MaybePromise<R>,
-  config: Config & {
-    seed?: NoInfer<I>;
+  config: InternalConfig & {
+    seed?: I;
   } = {},
 ): Streamie<I, Awaited<R>> {
   type OutputItem = Awaited<R>;
 
-  // Batching, flattening, and filtering are core concerns, but are not part of the public
-  // config; they are configured internally by the batch/flatten/filter combinators below.
-  const internalConfig = config as InternalConfig;
+  // Batching/decoupling live on InternalConfig, which this raw factory already receives
+  // (the public wrapper restricts them; the combinators set them directly).
+  const internalConfig = config;
 
   const queue: {
     input: RingBuffer<I>;
@@ -112,8 +125,10 @@ function streamie<I, R>(
     keepAlive: config.keepAlive === true,
     // Whether the handler's return value is emitted for it. False decouples output
     // from return: the handler emits via tools.emit and its return value feeds only
-    // the receipt. The filter/flatten combinators set this internally.
-    automaticallyEmit: config.automaticallyEmit !== false,
+    // the receipt. Read off internalConfig because automaticallyEmit is not on the
+    // public Config (it arrives as an inline literal on the decoupled overloads, or is
+    // set internally by the filter/flatten/produce/reduce combinators).
+    automaticallyEmit: internalConfig.automaticallyEmit !== false,
   };
 
   const state: {
@@ -736,12 +751,14 @@ function streamie<I, R>(
     const handler = batchSize === 1
       ? (item: OutputItem) => [item]
       : (items: OutputItem[]) => items;
-    const nextStreamie = streamie(
+    const nextStreamie = streamieInternal(
       handler as Handler<OutputItem, OutputItem[]>,
       // automaticallyEmit is forced on: a batch stage emits the assembled array as its
-      // handler's return value, so a caller's { automaticallyEmit: false } would leave it
-      // draining batches into a void (the same footgun guarded against in scan).
-      { ...withInheritedDefaults(config), batchSize, automaticallyEmit: true } as InternalConfig,
+      // handler's return value, so a caller's { automaticallyEmit: false } (only reachable
+      // via a cast — it is off the public Config) would leave it draining batches into a
+      // void. Goes through streamieInternal directly: an InternalConfig carrying batchSize
+      // and a forced automaticallyEmit matches neither strict public overload.
+      { ...withInheritedDefaults(config), batchSize, automaticallyEmit: true },
     ) as unknown as Streamie<OutputItem, OutputItem[]>;
 
     registerOutput(nextStreamie as unknown as Streamie<OutputItem, any>);
@@ -808,7 +825,7 @@ function streamie<I, R>(
     config: Config = {},
   ): Streamie<OutputItem, A> {
     let acc = initialValue;
-    const nextStreamie = streamie(
+    const nextStreamie = streamieInternal(
       (item: OutputItem) => {
         const next = reducer(acc, item);
         if (next && (typeof (next as PromiseLike<A>).then === 'function')) {
@@ -817,8 +834,10 @@ function streamie<I, R>(
         return (acc = next as A);
       },
       // automaticallyEmit is forced on (scan emits the accumulator as its return value);
-      // letting a caller's config turn it off would silently produce a stream with no
-      // output. concurrency is forced to 1 for the same reason it is in reduce.
+      // letting a caller turn it off (only reachable via a cast, since it is off the public
+      // Config) would silently produce a stream with no output. concurrency is forced to 1
+      // for the same reason it is in reduce. Goes through streamieInternal directly: a
+      // config with a forced automaticallyEmit matches neither strict public overload.
       { ...withInheritedDefaults(config), concurrency: 1, automaticallyEmit: true },
     );
 
