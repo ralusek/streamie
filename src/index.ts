@@ -51,8 +51,12 @@ function streamie<I, R>(
     seed?: NoInfer<I>;
   },
 ): Streamie<I, Awaited<R>>;
+// Implementation signature (not visible to callers — they see the two overloads above).
+// emit is typed Tools<I, any> here, not the default Tools<I> (never): the impl signature
+// has to be compatible with BOTH overloads, and a handler accepting a never-emit Tools is
+// not assignable to one accepting the decoupled overload's typed emit. any bridges both.
 function streamie<I, R>(
-  handler: (input: I, tools: Tools<I>) => MaybePromise<R>,
+  handler: (input: I, tools: Tools<I, any>) => MaybePromise<R>,
   config: Config & {
     seed?: NoInfer<I>;
   } = {},
@@ -123,6 +127,9 @@ function streamie<I, R>(
       output: boolean;
     };
     isDrained: boolean;
+    // Latches true once the drained event has fired (isDrained is a live getter that a
+    // late emit could flip back to false; this records that completion already happened).
+    hasDrained: boolean;
     isPaused: boolean;
     shouldDrain: boolean;
     isHalted: boolean;
@@ -155,6 +162,7 @@ function streamie<I, R>(
     get isDrained() {
       return state.shouldDrain && (queue.input.length === 0) && (state.count.handling === 0) && (queue.output.success.length === 0);
     },
+    hasDrained: false,
     shouldDrain: false,
     isPaused: false,
     isHalted: false,
@@ -267,7 +275,16 @@ function streamie<I, R>(
   // streams downstream promptly rather than buffering until it settles; the deferral is
   // guarded, so emitting many times costs at most one scheduled pass.
   function emit(output: unknown) {
-    if (settings.isSink) return;
+    // A sink has no output queue, so its emit is a no-op. A halted or already-drained
+    // streamie has nothing left to deliver to: emit is a stable, storable reference and
+    // the README invites handlers to call it "whenever they like", so a retained emit can
+    // outlive the stage. Honoring one after completion would re-push to the output queue,
+    // flipping the live isDrained getter back to false and stranding the value behind
+    // consumers that have already finished — so late calls are dropped. (Emits during
+    // draining, before the drained event fires, are still legitimate: that is how the
+    // final filter/flatten/reduce outputs are produced, hence the guard is hasDrained, the
+    // latched completion, rather than the in-progress shouldDrain.)
+    if (settings.isSink || state.isHalted || state.hasDrained) return;
     queue.output.success.push(output as OutputItem);
     scheduleProcess();
   }
@@ -571,6 +588,11 @@ function streamie<I, R>(
     ref.timeouts.forEach((timeoutId) => clearTimeout(timeoutId));
     ref.timeouts.clear();
 
+    // Latch completion before firing: from here on a late emit must be rejected (it would
+    // otherwise un-drain the live isDrained getter), and this records that even though
+    // isDrained itself could be flipped back by exactly such a call.
+    state.hasDrained = true;
+
     // The drained event latches, so reaching this from multiple paths (every
     // requestProcess cycle once drained, plus drain() itself) fires it only once.
     eventHandlers.drained.emit();
@@ -674,7 +696,11 @@ function streamie<I, R>(
     config: Config = {},
   ): Streamie<OutputItem, OutputItem> {
     const nextStreamie = streamie(
-      (item: OutputItem, tools: Tools<OutputItem>) => {
+      // This stage emits the item, so its emit is typed to the item type (the default
+      // Tools emit is `never`: an auto-emit handler must not emit, but this decoupled
+      // sugar does). The predicate, typed FilterHandler, still receives a never-emit
+      // Tools and so cannot itself emit.
+      (item: OutputItem, tools: Tools<OutputItem, OutputItem>) => {
         const passed = handler(item, tools);
         if (passed && typeof (passed as PromiseLike<boolean>).then === 'function') {
           return (passed as Promise<boolean>).then((didPass) => {
@@ -712,7 +738,10 @@ function streamie<I, R>(
       : (items: OutputItem[]) => items;
     const nextStreamie = streamie(
       handler as Handler<OutputItem, OutputItem[]>,
-      { ...withInheritedDefaults(config), batchSize } as InternalConfig,
+      // automaticallyEmit is forced on: a batch stage emits the assembled array as its
+      // handler's return value, so a caller's { automaticallyEmit: false } would leave it
+      // draining batches into a void (the same footgun guarded against in scan).
+      { ...withInheritedDefaults(config), batchSize, automaticallyEmit: true } as InternalConfig,
     ) as unknown as Streamie<OutputItem, OutputItem[]>;
 
     registerOutput(nextStreamie as unknown as Streamie<OutputItem, any>);
@@ -727,8 +756,10 @@ function streamie<I, R>(
   // throws, surfacing through the same handler-error path any thrown handler does.
   function flatten(config: Config = {}): Streamie<OutputItem, any> {
     const nextStreamie = streamie(
-      (items: OutputItem, tools: Tools<OutputItem>) => {
-        if (!Array.isArray(items)) throw new Error('Cannot flatten output that is not an array.');
+      // Decoupled sugar that emits each element; emit is typed unknown rather than the
+      // default never (an element type isn't recoverable from the unconstrained OutputItem).
+      (items: OutputItem, tools: Tools<OutputItem, unknown>) => {
+        if (!Array.isArray(items)) throw new Error('Cannot flatten a stream item that is not an array.');
         for (let i = 0; i < items.length; i++) tools.emit(items[i]);
         return items;
       },
@@ -785,7 +816,10 @@ function streamie<I, R>(
         }
         return (acc = next as A);
       },
-      { ...withInheritedDefaults(config), concurrency: 1 },
+      // automaticallyEmit is forced on (scan emits the accumulator as its return value);
+      // letting a caller's config turn it off would silently produce a stream with no
+      // output. concurrency is forced to 1 for the same reason it is in reduce.
+      { ...withInheritedDefaults(config), concurrency: 1, automaticallyEmit: true },
     );
 
     registerOutput(nextStreamie as unknown as Streamie<OutputItem, any>);

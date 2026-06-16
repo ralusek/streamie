@@ -37,6 +37,34 @@ describe('Streamie', () => {
       expect(seen).toEqual([2, 4]);
     });
 
+    test('a retained emit called after the stage has drained is dropped (no resurrection)', async () => {
+      const seen: number[] = [];
+      let retainedEmit!: (output: number) => void;
+      const head = streamie((n: number) => n, {});
+
+      const stage = head.produce<number>((n, { emit }) => {
+        retainedEmit = emit as (output: number) => void;
+        emit(n);
+      });
+      const tail = stage.each((n) => { seen.push(n); });
+
+      head.push(1);
+      head.drain();
+      await tail.promise;
+
+      expect(seen).toEqual([1]);
+      expect(stage.state.isDrained).toBe(true);
+
+      // Fire the retained reference well after completion: it must not re-open the output
+      // queue or flip the stage back out of its drained state.
+      retainedEmit(99);
+      await Promise.resolve();
+
+      expect(stage.state.isDrained).toBe(true);
+      expect(stage.state.count.queued.output).toBe(0);
+      expect(seen).toEqual([1]);
+    });
+
     test('the push receipt resolves with the return value, not the emitted output', async () => {
       const head = streamie((n: number) => n, {});
       const stage = head.produce<string>((n, { emit }) => {
@@ -94,6 +122,22 @@ describe('Streamie', () => {
       await tail.promise;
 
       expect(seen).toEqual([]);
+    });
+
+    test('still emits when a caller passes automaticallyEmit: false (it is forced on)', async () => {
+      const seen: number[] = [];
+      const head = streamie((n: number) => n, {});
+
+      // A misguided { automaticallyEmit: false } must not silently produce no output.
+      const tail = head
+        .scan((acc, n) => acc + n, 0, { automaticallyEmit: false } as never)
+        .each((sum) => { seen.push(sum); });
+
+      [1, 2, 3].forEach((n) => head.push(n));
+      head.drain();
+      await tail.promise;
+
+      expect(seen).toEqual([1, 3, 6]);
     });
 
     test('a push receipt resolves with the accumulator after that item', async () => {

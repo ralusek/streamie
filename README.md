@@ -183,9 +183,9 @@ An empty stream emits nothing from `.scan`.
 
 `.map` emits exactly one output per input, `.filter` zero or one, `.flatten` one per array
 element. `.produce` is the general case: the handler is handed an `emit` and produces as many
-(or as few) outputs as it likes, whenever it likes, while its return value feeds only the push
-receipt. Reach for it to fan one input out to a variable number of outputs without first
-materializing them into an array:
+(or as few) outputs as it likes — synchronously, after an `await`, or from a callback it
+schedules — while its return value feeds only the push receipt. Reach for it to fan one input
+out to a variable number of outputs without first materializing them into an array:
 
 ```ts
 source
@@ -201,9 +201,15 @@ parameter (`(line, { emit }: Tools<string, Token>) => …`); the latter also kee
 type precise. (`.produce(handler)` is exactly `.map(handler, { automaticallyEmit: false })`,
 with a name that says what it is for.)
 
+`emit` is a stable reference you may hold and call from a scheduled callback, but only while
+the stage is still running: once the stage has drained (or halted) there is nowhere left to
+deliver, so an `emit` fired after completion is silently dropped rather than re-opening a
+finished stage. If you schedule emits, arrange to finish them before the source drains —
+typically by keeping work outstanding through a push receipt or your own pending count.
+
 Most interesting `.produce` stages are stateful — windowing, dynamic batching, dedup,
-emit-on-threshold. There is no built-in scratchpad: a handler is a closure, so keep the state
-in the surrounding scope and the stage carries it across invocations on its own:
+threshold-triggered emits. There is no built-in scratchpad: a handler is a closure, so keep
+the state in the surrounding scope and the stage carries it across invocations on its own:
 
 ```ts
 const acc = { sum: 0 };

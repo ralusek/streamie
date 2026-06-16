@@ -98,6 +98,31 @@ const sourceDefault = streamie((value: number) => value > 0, {});
 export type SourceDefault_Output = Expect<Equal<OutputOf<typeof sourceDefault>, boolean>>;
 
 // ---------------------------------------------------------------------------
+// emit is unavailable in an auto-emit handler (soundness: output IS the return
+// value there, so a stray emit would be a second, untracked output source). The
+// default Tools emit is typed `never`, making any such call a type error.
+// ---------------------------------------------------------------------------
+
+head.map((value, { emit }) => {
+  // @ts-expect-error emit is unusable (never) in an auto-emit handler
+  emit(`#${value}`);
+  return value;
+});
+
+streamie((value: number, { emit }) => {
+  // @ts-expect-error emit is unusable (never) in an auto-emit handler
+  emit(value);
+  return value;
+}, {});
+
+// An explicit automaticallyEmit: true is still an auto-emit handler — emit stays closed.
+head.map((value, { emit }) => {
+  // @ts-expect-error emit is unusable (never) in an auto-emit handler
+  emit(value);
+  return value;
+}, { automaticallyEmit: true });
+
+// ---------------------------------------------------------------------------
 // Receipt type (R) tracks the handler's RETURN value, distinct from output
 // ---------------------------------------------------------------------------
 

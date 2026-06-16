@@ -64,7 +64,7 @@ export type InternalConfig = Config & {
   maxBatchWait?: number;
 };
 
-export type Tools<I, O = unknown> = {
+export type Tools<I, O = never> = {
   // The streamie's own public push. Typing the receipt's promise here would be
   // circular — it resolves with the very output type the handler receiving these
   // tools is in the middle of defining — so tools expose only the synchronous
@@ -75,16 +75,21 @@ export type Tools<I, O = unknown> = {
   // automatically-emitted return value. The general form of producing output: a
   // normal stage emits its return value once for you, a filter emits conditionally,
   // a flatten emits once per element. A stable reference across invocations, safe to
-  // call any number of times (including zero). Without automaticallyEmit: false the
+  // call any number of times (including zero) — including from a callback scheduled
+  // after the handler returns, though an emit fired once the stage has drained or halted
+  // is dropped (it has nowhere left to deliver). Without automaticallyEmit: false the
   // stage also auto-emits the return value, so most handlers ignore this entirely.
   //
-  // O defaults to unknown — the type an auto-emit handler sees, where the output type
-  // is the return value and tying emit to it would put that type in a parameter
-  // position while it is still being inferred from the return, breaking inference. The
-  // decoupled combinator forms (automaticallyEmit: false) set O instead, from an
-  // explicit type argument or an annotation on this very parameter; that typed emit is
-  // then what drives the stage's output type, since TypeScript cannot read the output
-  // type out of the emit() calls in the handler body.
+  // O defaults to never — the type an auto-emit handler sees. There, output IS the
+  // return value, so emit must not be usable: it would be a second, untracked source of
+  // output (a string emitted from a handler whose return is a number, with the stage
+  // still typed Streamie<_, number>), and TypeScript cannot fold those emits into the
+  // output type since it never infers a generic from a function body. never makes such a
+  // call a type error while leaving return inference untouched (unlike tying emit to the
+  // return type, which would put a still-being-inferred type in a parameter position and
+  // break that inference). The decoupled combinator forms (automaticallyEmit: false) set
+  // O instead — from an explicit type argument or an annotation on this very parameter —
+  // and that typed emit is then what drives the stage's output type.
   emit: (output: O) => void;
   index: number;
 };
