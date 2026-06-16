@@ -1,5 +1,5 @@
 import streamie from '../dist';
-import type { Streamie, StreamieHaltPayload } from '../dist/types';
+import type { Streamie, StreamieHaltPayload, Tools } from '../dist/types';
 import type { StreamieQueueError } from '../dist/error';
 
 /*
@@ -28,8 +28,12 @@ type Equal<A, B> =
 type Expect<T extends true> = T;
 type NotAny<T> = IsAny<T> extends true ? false : true;
 
-type InputOf<S> = S extends Streamie<infer I, any> ? I : never;
-type OutputOf<S> = S extends Streamie<any, infer O> ? O : never;
+// The third (R) argument must be `any`, not omitted: with the default R = O, writing
+// Streamie<any, infer O> would pin R to the inferred O and fail to match a decoupled or
+// flatten stage whose R differs from O.
+type InputOf<S> = S extends Streamie<infer I, any, any> ? I : never;
+type OutputOf<S> = S extends Streamie<any, infer O, any> ? O : never;
+type ReceiptOf<S> = S extends Streamie<any, any, infer R> ? R : never;
 
 type Comment = { id: string; body: string };
 
@@ -131,6 +135,54 @@ export type BatchedFilter_Output = Expect<
 // Filter predicates must return booleans.
 // @ts-expect-error filter predicates return boolean, not string
 source.filter((value) => `${value}`);
+
+// ---------------------------------------------------------------------------
+// produce / reduce / scan
+// ---------------------------------------------------------------------------
+
+// produce decouples output from return: the output type comes from an explicit type
+// argument (and types emit), while the receipt tracks the return value.
+const produced = source.produce<string>((value, { emit }) => {
+  emit(`#${value}`);
+  // @ts-expect-error emit only accepts the declared output type
+  emit(123);
+  return value;
+});
+export type Produced_Output = Expect<Equal<OutputOf<typeof produced>, string>>;
+
+// An annotation on the emit parameter keeps both the output and the receipt precise.
+const producedAnnotated = source.produce((value, { emit }: Tools<number, boolean>) => {
+  emit(value % 2 === 0);
+  return value;
+});
+export type ProducedAnnotated_Output = Expect<Equal<OutputOf<typeof producedAnnotated>, boolean>>;
+export type ProducedAnnotated_Receipt = Expect<Equal<ReceiptOf<typeof producedAnnotated>, number>>;
+
+// reduce aggregates to the accumulator type, emitted once; the receipt is the accumulator.
+const reduced = source.reduce((acc, value) => acc + value, 0);
+export type Reduced_Output = Expect<Equal<OutputOf<typeof reduced>, number>>;
+export type Reduced_Receipt = Expect<Equal<ReceiptOf<typeof reduced>, number>>;
+export type Reduced_Output_NotAny = Expect<NotAny<OutputOf<typeof reduced>>>;
+
+// The accumulator type is free to differ from the item type.
+const grouped = source.reduce(
+  (acc: Record<string, number[]>, value) => acc,
+  {} as Record<string, number[]>,
+);
+export type Grouped_Output = Expect<Equal<OutputOf<typeof grouped>, Record<string, number[]>>>;
+
+// reduce's reducer must return the accumulator type.
+// @ts-expect-error reducer must return the accumulator type (number), not string
+source.reduce((acc, value) => `${acc + value}`, 0);
+
+// An async reducer is permitted and unwraps to the accumulator type.
+const reducedAsync = source.reduce(async (acc, value) => acc + value, 0);
+export type ReducedAsync_Output = Expect<Equal<OutputOf<typeof reducedAsync>, number>>;
+
+// scan has the same shape as reduce, emitting the accumulator after each item.
+const scanned = source.scan((acc, value) => `${acc}${value}`, '');
+export type Scanned_Output = Expect<Equal<OutputOf<typeof scanned>, string>>;
+export type Scanned_Receipt = Expect<Equal<ReceiptOf<typeof scanned>, string>>;
 
 // ---------------------------------------------------------------------------
 // Paginator-style inference (tools included)
