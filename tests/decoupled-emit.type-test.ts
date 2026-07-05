@@ -150,7 +150,7 @@ const annotatedWithReturn = head.map((value, { emit }: Tools<number, boolean>) =
 }, { automaticallyEmit: false });
 export type AnnotatedWithReturn_Output = Expect<Equal<OutputOf<typeof annotatedWithReturn>, boolean>>;
 export type AnnotatedWithReturn_Receipt = Expect<Equal<ReceiptOf<typeof annotatedWithReturn>, number>>;
-const annotatedReceipt = annotatedWithReturn.push(0).promise;
+const annotatedReceipt = annotatedWithReturn.push.withReceipt(0).promise;
 export type AnnotatedWithReturn_ReceiptPromise = Expect<Equal<typeof annotatedReceipt, Promise<number>>>;
 
 // For an auto-emit stage, output and receipt coincide.

@@ -16,6 +16,10 @@
 //
 // The subscription side (events.x.on) is the part safe to hand out publicly; emit
 // stays with the owner.
+//
+// Subscription identity follows EventEmitter, not DOM EventTarget: subscribing the
+// same function twice registers two independent subscriptions — it fires twice per
+// emit, and each on() call's returned unsubscribe removes only its own registration.
 
 export type Unsubscribe = () => void;
 
@@ -58,22 +62,47 @@ export function event<Payload = void>(options: EventOptions = {}): EventSpec<Pay
 const UNLATCHED = Symbol('unlatched');
 const noop = () => {};
 
+// Invokes a subscriber with its exceptions isolated from dispatch. These events drive
+// streamie-to-streamie wiring (a stage's drain/halt cascade is itself a subscriber to
+// its neighbors' lifecycle events), so a throwing user handler must not prevent the
+// handlers queued behind it from running — that would sever a pipeline mid-cascade and
+// hang downstream promises — nor skip a latching event's bookkeeping. The error is not
+// swallowed: it is rethrown from a fresh microtask, so it still surfaces as an uncaught
+// exception, just without taking event delivery down with it.
+function invokeHandler<Payload>(handler: (payload: Payload) => void, payload: Payload): void {
+  try {
+    handler(payload);
+  } catch (err) {
+    queueMicrotask(() => { throw err; });
+  }
+}
+
 function createEvent<Payload>({ latching = false }: EventOptions): EventEmitter<Payload> {
   const handlers = new Set<(payload: Payload) => void>();
   let latched: Payload | typeof UNLATCHED = UNLATCHED;
 
   const on = ((handler: (payload: Payload) => void): Unsubscribe => {
     if (latched !== UNLATCHED) {
-      handler(latched as Payload);
+      // Same isolation as a dispatched firing: a late subscriber's throw should
+      // surface identically whether it attached before or after the transition.
+      invokeHandler(handler, latched as Payload);
       return noop;
     }
-    handlers.add(handler);
-    return () => { handlers.delete(handler); };
+    // Each subscription gets its own wrapper (as .once already does) so that the
+    // handler Set holds a unique member per on() call: EventEmitter semantics.
+    // Adding the handler itself would make the Set silently dedupe a function
+    // subscribed twice — one invocation per emit instead of two, and worse, the two
+    // returned unsubscribes would alias (either one tears down "both" subscriptions).
+    // The wrapper costs one closure at subscription time (pipeline wiring, not the
+    // per-item path) and one call frame per dispatch.
+    const entry = (payload: Payload) => handler(payload);
+    handlers.add(entry);
+    return () => { handlers.delete(entry); };
   }) as Subscribe<Payload>;
 
   on.once = (handler: (payload: Payload) => void): Unsubscribe => {
     if (latched !== UNLATCHED) {
-      handler(latched as Payload);
+      invokeHandler(handler, latched as Payload);
       return noop;
     }
     const wrapped = (payload: Payload) => {
@@ -98,9 +127,11 @@ function createEvent<Payload>({ latching = false }: EventOptions): EventEmitter<
       // one in flight. (For a latching event there is no next emit; subscribing
       // mid-firing lands on the already-set latch and is invoked immediately, which
       // is that mode's contract.)
+      // Each handler is invoked exception-isolated (see invokeHandler): a thrower
+      // cannot starve the handlers behind it, and the latching clear below always runs.
       const snapshot = Array.from(handlers);
       for (let i = 0; i < snapshot.length; i++) {
-        if (handlers.has(snapshot[i])) snapshot[i](payload);
+        if (handlers.has(snapshot[i])) invokeHandler(snapshot[i], payload);
       }
     }
     // Once latched, immediate invocation takes over delivery; the retained handlers

@@ -73,7 +73,7 @@ describe('Streamie', () => {
       });
       stage.sink();
 
-      const receipt = stage.push(7);
+      const receipt = stage.push.withReceipt(7);
       stage.drain();
       await stage.promise;
 
@@ -145,8 +145,8 @@ describe('Streamie', () => {
       const scanned = head.scan((acc, n) => acc + n, 0);
       scanned.sink();
 
-      const r1 = scanned.push(10);
-      const r2 = scanned.push(5);
+      const r1 = scanned.push.withReceipt(10);
+      const r2 = scanned.push.withReceipt(5);
       scanned.drain();
       await scanned.promise;
 
@@ -239,8 +239,8 @@ describe('Streamie', () => {
       const reduced = head.reduce((acc, n) => acc + n, 0);
       reduced.sink();
 
-      const r1 = reduced.push(3);
-      const r2 = reduced.push(4);
+      const r1 = reduced.push.withReceipt(3);
+      const r2 = reduced.push.withReceipt(4);
       reduced.drain();
       await reduced.promise;
 

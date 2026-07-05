@@ -1,7 +1,7 @@
 {
   "name": "streamie",
   "version": "2.0.0",
-  "description": "Library for processing data using common array behaviors.",
+  "description": "Async data pipelines with familiar array-style methods — per-stage concurrency, backpressure by default, batching, retries, and bridges to Web and Node streams.",
   "type": "module",
   "main": "./dist/cjs/index.cjs",
   "module": "./dist/esm/index.js",
@@ -47,7 +47,8 @@
   },
   "files": [
     "dist",
-    "src"
+    "src",
+    "CHANGELOG.md"
   ],
   "sideEffects": false,
   "engines": {

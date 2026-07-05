@@ -61,17 +61,17 @@ export default function createAsyncIterator<OutputItem>(
 
     // Unhooks this consumer from the source: firing its onDraining handlers tells the
     // source to remove us from its consumers (the same path a draining downstream
-    // streamie uses), and the backpressure release nudges its process loop in case it
-    // was stalled on our backpressure. Deferred to a microtask because detachment can
-    // be triggered from inside the source's own processing (e.g. error propagation
-    // mid-handleOnError), where synchronously re-entering requestProcess could process
-    // further items before a pending halt is applied.
+    // streamie uses) — the source's removal handler then nudges its own process loop,
+    // covering the case where it was stalled on this consumer's backpressure.
+    // Deferred to a microtask because detachment can be triggered from inside the
+    // source's own processing (e.g. error propagation mid-handleOnError), where
+    // synchronously re-entering requestProcess could process further items before a
+    // pending halt is applied.
     function detach() {
       if (isDetached) return;
       isDetached = true;
       queueMicrotask(() => {
         consumerEventHandlers.draining.emit();
-        consumerEventHandlers.backpressureRelease.emit();
         while (sourceSubscriptions.length > 0) sourceSubscriptions.pop()!();
       });
     }
@@ -100,6 +100,13 @@ export default function createAsyncIterator<OutputItem>(
       while (pendingPulls.length > 0) {
         pendingPulls.shift()!.resolve({ value: undefined, done: true });
       }
+      // Normal completion detaches too. The for await protocol doesn't call return()
+      // when next() reports done, so without this the consumer object (and the
+      // closures it retains) would stay registered on the source — and subscribed to
+      // its events — for as long as the drained source handle itself lives. Anything
+      // still buffered is unaffected: detaching only stops future delivery, and the
+      // remaining next() calls serve the buffer locally.
+      detach();
     }
 
     function next(): Promise<IteratorResult<OutputItem, undefined>> {

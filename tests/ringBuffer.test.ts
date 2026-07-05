@@ -107,4 +107,82 @@ describe('RingBuffer', () => {
     const slots = (rb as unknown as { buffer: unknown[] }).buffer;
     expect(slots.every((slot) => slot === undefined)).toBe(true);
   });
+
+  it('keeps clearing vacated slots across growth of a wrapped buffer', () => {
+    const rb = new RingBuffer<{ id: number }>();
+    // Wrap head away from 0 so growth has to re-linearize a split buffer.
+    for (let i = 0; i < 10; i++) rb.push({ id: -1 });
+    for (let i = 0; i < 10; i++) rb.shift();
+    // Overfill past the initial 16 slots to force doublings (16 -> 64).
+    for (let i = 0; i < 40; i++) rb.push({ id: i });
+
+    // Dequeue half; the vacated slots of the post-growth array must be cleared.
+    for (let i = 0; i < 20; i++) expect(rb.shift()!.id).toBe(i);
+    const slots = (rb as unknown as { buffer: unknown[] }).buffer;
+    expect(slots.filter((slot) => slot !== undefined)).toHaveLength(rb.length);
+
+    // The remainder still dequeues FIFO, and the buffer ends fully cleared.
+    for (let i = 20; i < 40; i++) expect(rb.shift()!.id).toBe(i);
+    expect(slots.every((slot) => slot === undefined)).toBe(true);
+  });
+
+  it('shiftMany(0) returns an empty array and removes nothing', () => {
+    const rb = new RingBuffer<number>();
+    rb.push(1);
+    rb.push(2);
+    expect(rb.shiftMany(0)).toEqual([]);
+    expect(rb.length).toBe(2);
+    expect(rb.shift()).toBe(1);
+    expect(rb.shift()).toBe(2);
+  });
+
+  it('shiftMany rejects negative and non-integer counts with a clear error', () => {
+    const rb = new RingBuffer<number>();
+    rb.push(1);
+    expect(() => rb.shiftMany(-1)).toThrow('non-negative integer');
+    expect(() => rb.shiftMany(1.5)).toThrow('non-negative integer');
+    expect(() => rb.shiftMany(NaN)).toThrow('non-negative integer');
+    // The rejected calls left the buffer unharmed.
+    expect(rb.length).toBe(1);
+    expect(rb.shift()).toBe(1);
+  });
+
+  it('rounds a requested capacity above the minimum up to the next power of two', () => {
+    const rb = new RingBuffer<number>(100);
+    const slots = (rb as unknown as { buffer: unknown[] }).buffer;
+    expect(slots.length).toBe(128);
+
+    // The full rounded capacity is usable without growth, and FIFO order holds.
+    for (let i = 0; i < 128; i++) rb.push(i);
+    expect((rb as unknown as { buffer: unknown[] }).buffer).toBe(slots);
+    for (let i = 0; i < 128; i++) expect(rb.shift()).toBe(i);
+    expect(rb.length).toBe(0);
+  });
+
+  it('rejects a non-finite or negative initial capacity', () => {
+    expect(() => new RingBuffer(Infinity)).toThrow('finite, non-negative');
+    expect(() => new RingBuffer(-1)).toThrow('finite, non-negative');
+    expect(() => new RingBuffer(NaN)).toThrow('finite, non-negative');
+  });
+
+  it('clear empties the buffer, releases every slot, and keeps it usable at the same capacity', () => {
+    const rb = new RingBuffer<{ id: number }>();
+    // Wrap first so clearing must also be correct for a non-zero head.
+    for (let i = 0; i < 12; i++) rb.push({ id: -1 });
+    for (let i = 0; i < 12; i++) rb.shift();
+    for (let i = 0; i < 10; i++) rb.push({ id: i });
+
+    const slotsBefore = (rb as unknown as { buffer: unknown[] }).buffer;
+    rb.clear();
+
+    expect(rb.length).toBe(0);
+    expect(rb.shift()).toBeUndefined();
+    // Every reference is released, and the backing array is retained (no reallocation).
+    expect(slotsBefore.every((slot) => slot === undefined)).toBe(true);
+    expect((rb as unknown as { buffer: unknown[] }).buffer).toBe(slotsBefore);
+
+    // Still fully usable afterwards.
+    for (let i = 0; i < 5; i++) rb.push({ id: i });
+    expect(rb.shiftMany(5).map((item) => item.id)).toEqual([0, 1, 2, 3, 4]);
+  });
 });

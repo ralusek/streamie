@@ -29,6 +29,16 @@ await streamie(async (page: number, { push, drain }) => {
   .promise;                            // Resolves when drained; rejects on failure.
 ```
 
+Or, when the work starts from a collection you already have:
+
+```ts
+import { from } from 'streamie';
+
+const results = await from(userIds)              // Any (async) iterable.
+  .map(fetchUser, { concurrency: 8, retry: 2 })  // Parallel, with retries.
+  .toArray();                                    // Collect the outputs.
+```
+
 ### Where it fits (and where it doesn't)
 
 Reach for Streamie when the problem is **processing data**: ETL, scraping and pagination,
@@ -45,8 +55,9 @@ work buffers unboundedly, where Streamie simply stalls the producer instead.
 ### What you get
 
   - **Backpressure by default.** Bounded queues at every stage mean a slow consumer slows
-    the producers feeding it. Pushes return a [receipt](#push-receipts) with the item's
-    completion promise and a cooperative backpressure signal.
+    the producers feeding it. `push` returns a cooperative backpressure signal, and
+    `push.withReceipt` a [receipt](#pushing-and-push-receipts) with the item's
+    completion promise.
   - **Per-stage concurrency.** Any iterative method takes a `concurrency` to parallelize that
     stage without letting it outrun downstream work.
   - **Batching and flattening.** `.batch(n)` groups items into arrays of up to `n`;
@@ -61,6 +72,11 @@ work buffers unboundedly, where Streamie simply stalls the producer instead.
   - **Standard consumption paths.** Every streamie is an
     [async iterable](#async-iteration), and both [Web Streams](#web-streams) and
     [Node streams](#node-streams) bridge directly in and out.
+  - **Collections in, collections out.** [`from`](#sourcing-from-a-collection-from) feeds a
+    pipeline from any (async) iterable under backpressure, and
+    [`.toArray()`](#collecting-results-toarray) collects the results — bounded-concurrency
+    mapping over a collection in one chain. Per-stage
+    [`retry` and `timeout`](#configuration) cover the flaky-work cases around it.
 
 # Installation
 `npm install --save streamie`
@@ -125,6 +141,52 @@ items
   });
 ```
 
+When the map and the flatten belong together — one input becomes several outputs via a
+handler that returns an array — `.flatMap` fuses them into a single stage (one queue, one
+`concurrency` setting):
+
+```ts
+lines
+  .flatMap((line) => line.split(','))   // Streamie<string, string>
+  .each((cell) => index(cell));
+```
+
+## Sourcing from a collection: `from`
+
+`from(source, config?)` creates a streamie fed from any iterable or async iterable — an
+array, a generator, an async generator, anything speaking either iteration protocol —
+under backpressure: the source is only pulled as fast as the pipeline absorbs items. The
+source completing drains the streamie; the source throwing aborts it with that error; and
+the streamie terminating first (drained, aborted, or a downstream failure propagating
+back) stops the pull and closes the source iterator, so a generator's `finally` blocks
+run.
+
+```ts
+import { from } from 'streamie';        // Also available as streamie.from.
+
+await from(jobs)
+  .map(runJob, { concurrency: 4 })
+  .each(recordResult)
+  .promise;
+```
+
+This is the ergonomic path for the `p-map` use case — "process this collection with
+bounded concurrency" — without the create/push/drain dance.
+
+## Collecting results: `.toArray`
+
+`.toArray()` consumes a streamie to completion and resolves with every output in
+delivery order — sugar over a `for await` loop, with the same contract: it registers a
+consumer (participating in backpressure, receiving retained backlog), resolves when the
+streamie drains, and rejects if it errors. On a streamie that never drains it never
+settles; pair it with a draining source or `.take`/`.until`.
+
+```ts
+const enriched = await from(records)
+  .map(enrich, { concurrency: 8 })
+  .toArray();
+```
+
 ## Batching
 
 `.batch(10)` groups individual items into arrays of up to 10 before passing them on. This is
@@ -141,8 +203,10 @@ items
 By default a batch stage waits for a full `n` items before emitting (a drain flushes
 whatever partial batch remains — see Draining). When items arrive in bursts and you don't
 want a half-full batch waiting indefinitely for the rest, pass `maxBatchWait` (milliseconds):
-the stage emits the items it has once that long has elapsed since the last batch, even if
-fewer than `n` have accumulated.
+the stage emits the items it has once the oldest of them has waited that long, even if
+fewer than `n` have accumulated. The window is measured from when the partial batch began
+accumulating, so the first batch is covered like any other, and an idle gap between
+batches doesn't count against the next item that arrives.
 
 ```ts
 items
@@ -178,6 +242,37 @@ items
 ```
 
 An empty stream emits nothing from `.scan`.
+
+## Truncating: `.take` and `.until`
+
+`.take(n)` passes through the first `n` items and then drains itself. `.until(predicate)`
+passes items through until the predicate matches one, then drains; the matching item is
+excluded by default, and `{ inclusive: true }` emits it before draining (an async
+predicate is awaited). Both evaluate sequentially (`concurrency` is forced to 1) so the
+cutoff is deterministic, and both make "stop after enough" natural for open-ended sources
+like paginators:
+
+```ts
+const first1000 = await paginator
+  .flatten()
+  .take(1000)
+  .toArray();
+```
+
+The self-drain is a *voluntary* departure, the same detach as breaking out of a
+`for await`: the producer is not torn down. A sibling consumer keeps receiving
+everything, and a producer left with no consumers parks on its retained outputs (bounded
+by its backpressure) for any later consumer (see Sinks). If nothing else will consume the
+open-ended source, terminate it explicitly once you have what you came for — `abort()` is
+the usual move for a source that only stops exceptionally (it also closes a
+`from(generator)`'s generator), and its rejection of that source's own promise is
+expected:
+
+```ts
+const items = paginator.flatten().take(1000);
+const results = await items.toArray(); // Resolves after 1000 items.
+paginator.abort();                     // Nothing further will be consumed.
+```
 
 ## Producing: `.produce`
 
@@ -261,9 +356,20 @@ alive (see Aborting, and `keepAlive` under Configuration). Note the one shared c
 the producer holds its output until *every* branch is ready for the next item, so a slow
 branch paces the fast ones (see Known limitations).
 
-Fan-*in* is the inverse — feed several producers into one consumer with `registerInput`/
-`registerOutput` (the same wiring the combinators use internally). The consumer drains once
-all of its inputs have drained, and aborts only if all of them aborted (see Aborting).
+Fan-*in* is the inverse — feed several producers into one consumer. `merge` is the sugar
+for it (built on the same `registerInput`/`registerOutput` wiring the combinators use
+internally, which remains available for custom topologies):
+
+```ts
+import { merge } from 'streamie';       // Also available as streamie.merge.
+
+const all = merge([sourceA, sourceB]);  // Every output of each source, as they arrive.
+all.each(process);
+```
+
+The merged streamie receives every source's outputs as they arrive (no ordering across
+sources), drains once *all* of its inputs have drained, and aborts only if all of them
+aborted (see Aborting).
 
 ## Draining/Completion/Promises
 
@@ -314,8 +420,11 @@ You have three common options:
     standalone streamie that is itself the endpoint.
 
 A sink discards outputs as they settle. It has no consumable output queue, so
-`backpressureAt.output` has no effect on that stage, and trying to attach a consumer to it
-throws. Await the sink's `.promise` for completion.
+`backpressureAt.output` has no effect on that stage, and it cannot be consumed from:
+`.each` and `.sink()` return a `SinkStreamie`, a type with no consumer-attaching members
+(`.map`, `.toArray`, `for await`, and the rest are compile errors, not runtime throws),
+and attempting the same at runtime — e.g. on a streamie constructed directly with
+`{ sink: true }` — throws. Await the sink's `.promise` for completion.
 
 Output retention only applies when there is no current consumer, or when a consumer
 detaches voluntarily, such as an iterator `break`. If a downstream consumer fails, the
@@ -379,29 +488,60 @@ s.pause(false);   // Resume.
 Unlike `drain()`, a pause is not a completion signal and does not settle `.promise`; it is
 purely a throttle you control. `state.isPaused` reports the current setting.
 
-## Push Receipts
+## Pushing and Push Receipts
 
-`push` takes a single item, is synchronous, and returns a receipt. The receipt's
-`.promise` resolves, once the item's handler invocation has settled, with the handler's
-**return value** — which for a plain `.map` is the one output it produced, but for the
-decoupled stages is distinct from what they emitted downstream (see the last bullet below):
+`push` takes a single item, is synchronous, and returns the input backpressure state
+the push produced. Backpressure never refuses a push, so this is a cooperative
+signal: a producer seeing `true` should pause and resume on the
+`onBackpressureRelease` event. (What *does* refuse a push is a streamie that can no
+longer accept one at all: pushing to a draining, drained, or halted streamie throws,
+since the item could never be handled.)
+
+```ts
+if (doubled.push(item)) {
+  // true = the push left the streamie at or beyond its input backpressure threshold.
+  await new Promise<void>((resolve) => doubled.onBackpressureRelease.once(resolve));
+}
+```
+
+> Note the polarity: `true` means *backpressured*, consistent with `backpressure`
+> everywhere else in streamie's API — and the **inverse** of Node's
+> `writable.write()`, whose `true` means "keep writing".
+
+The plain `push` is deliberately fire-and-forget: nothing is allocated, and the
+item's individual outcome is not observable. That makes it the right default for the
+overwhelmingly common cases — high-volume producers (this is exactly how `from`,
+`fromReadable`, and `fromReadableStream` feed their targets) and the self-feeding
+paginator pattern, where a handler never sees its own receipts anyway:
+
+```ts
+const paginator = streamie(async (page: number, { push, drain }) => {
+  const { items, hasMore } = await fetchPage(page);
+  hasMore ? push(page + 1) : drain();
+  return items;
+}, { seed: 0 });
+```
+
+### `push.withReceipt`
+
+A producer that *does* want to await an individual item opts into a tracked push —
+mirroring the events API's `on`/`on.once` shape. `push.withReceipt` enqueues under
+exactly the same rules but returns a receipt: `.backpressure` is the same boolean the
+plain push returns, and `.promise` resolves, once the item's handler invocation has
+settled, with the handler's **return value** — which for a plain `.map` is the one
+output it produced, but for the decoupled stages is distinct from what they emitted
+downstream (see the last bullet below):
 
 ```ts
 const doubled = streamie(async (input: number) => input * 2, {});
 
-const receipt = doubled.push(21);
+const receipt = doubled.push.withReceipt(21);
 await receipt.promise; // 42
 ```
 
-The receipt also carries the input backpressure state the push produced. Pushes are
-never refused, so this is a cooperative signal: a producer seeing `true` should pause
-and resume on the `onBackpressureRelease` event.
-
-```ts
-if (doubled.push(item).backpressure) {
-  await new Promise<void>((resolve) => doubled.onBackpressureRelease.once(resolve));
-}
-```
+Receipts are not free — each allocates an object, and a streamie's first
+`push.withReceipt` activates per-item settlement bookkeeping that stays on for its
+lifetime — which is why they are the opt-in rather than the default.
 
 A few behaviors worth knowing:
   - Receipt promises are created lazily, on first access. A receipt you never look at
@@ -447,6 +587,10 @@ Note that a halt is not a drain: when a streamie halts on an error, `onHalted`
 fires but `onDraining`/`onDrained` do not. A handler attached during an event's
 firing waits for the next firing rather than being invoked by the one in flight
 (except on an already-latched event, where it is invoked immediately as above).
+
+Subscription identity follows `EventEmitter`, not DOM `EventTarget`: subscribing the
+same function twice registers two independent subscriptions — it fires twice per
+event, and each subscription's returned unsubscribe removes only its own registration.
 
 `onHalted`'s payload reports how the halt came about:
 `{ isAborted, abortError, lastError }` — `isAborted` and `abortError` describe an
@@ -562,6 +706,10 @@ itself. The optional `strategy` is a standard queuing strategy for controlling r
 The `Stream` suffix distinguishes these helpers from the Node stream helpers in
 `streamie/node`.
 
+Note that a bridge is a consumer like any other, and outputs are *broadcast* to all
+consumers (see Branching): two `toReadableStream`s (or a bridge plus a `for await`) on
+the same streamie each receive every item — fan-out, not load-balancing.
+
 ## Node Streams
 
 Node's `Readable` and `Writable` streams from `node:stream` bridge through the
@@ -655,13 +803,29 @@ Every stage takes an optional config object as its last argument (`streamie(hand
     For long-lived hubs whose consumers come and go — see Aborting.
   - **`yieldAfter`** (default `100`) — the synchronous-pipeline yield budget in milliseconds.
     See Yielding.
+  - **`retry`** (default off) — re-attempts a failed handler invocation before it counts as
+    an error. A bare number is that many retries with no delay (total tries = retries + 1);
+    the object form `{ attempts, delay? }` adds a delay in milliseconds before each retry —
+    a constant, or a function of the 1-based attempt number (e.g.
+    `(attempt) => 2 ** attempt * 100` for exponential backoff). Only when the final attempt
+    fails does the error reach `onError`/`haltOnError`/the receipt. Retries re-invoke the
+    handler with the same input and tools, so a decoupled handler that emits before failing
+    will have those emits delivered once per attempt — emit after the fallible work, or
+    return the outputs and let the stage emit them. Not inherited by chained stages.
+  - **`timeout`** (default off) — milliseconds an invocation may run before it is treated
+    as failed. The rejection is an ordinary handler error (wrapped in
+    `StreamieQueueError`, subject to `retry`, `haltOnError`, and propagation; with both
+    configured, each attempt gets its own window). The handler itself cannot be cancelled —
+    its work continues in the background — but its late settlement is ignored. Not
+    inherited by chained stages.
   - **`maxBatchWait`** (`.batch` only) — the longest a partial batch waits before being
     emitted. See Batching.
 
-The handler itself receives `(item, tools)`, where `tools` is `{ push, drain, index }`:
+The handler itself receives `(item, tools)`, where `tools` is `{ push, drain, emit, index }`:
 `push` enqueues more input into this same streamie (see Pagination), `drain` marks it for
-graceful completion (see Draining), and `index` is the zero-based sequence number of this
-invocation.
+graceful completion (see Draining), `emit` produces output on a decoupled stage (see
+Producing — on an ordinary auto-emit stage it is unusable, since the return value is the
+output), and `index` is the zero-based sequence number of this invocation.
 
 ## Introspection
 
@@ -714,9 +878,6 @@ elements individually.
     delivery to the fast ones rather than each branch draining at its own rate. This keeps any
     single branch from growing an unbounded queue, but a per-consumer buffering strategy is
     not yet configurable (see Branching).
-  - **No `flatMap` yet.** Map-then-flatten is expressible by composing `.map(...).flatten()`,
-    but a single fused operator is not yet provided. (Aggregation is covered by `.reduce` and
-    `.scan`, and arbitrary fan-out by `.produce`.)
 
 # Migrating from 1.x
 
@@ -729,7 +890,14 @@ accepted on `.map`/`.filter`. Call the dedicated stages in the chain instead:
   - Flattening is now `.flatten()` rather than a `flatten` option.
 
 `.map` now always emits exactly one output per input; reach for `.filter`, `.batch`, and
-`.flatten` when you need to change the item shape. The build target is `es2020`.
+`.flatten` when you need to change the item shape. The build target is `es2022`
+(Node >= 18).
+
+`push` now takes exactly one item and returns the input backpressure boolean. In 1.x it
+was variadic and returned nothing — if you were calling `push(a, b, c)`, the extra
+arguments are now silently ignored (TypeScript flags this; plain JavaScript will not), so
+push each item individually. To observe an individual item's outcome, use
+`push.withReceipt(item)` (see [Pushing and Push Receipts](#pushing-and-push-receipts)).
 
 # Contributing
 

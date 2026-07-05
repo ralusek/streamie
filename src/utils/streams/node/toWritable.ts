@@ -1,6 +1,7 @@
 // Types
 import type { Writable } from 'node:stream';
 import type { Streamie } from '../../../types.js';
+import type { Unsubscribe } from '../../events/index.js';
 
 // Pipes a streamie's outputs into a node:stream Writable — the Node mirror of
 // toWritableStream — resolving once the streamie has drained and the sink has finished.
@@ -8,7 +9,9 @@ import type { Streamie } from '../../../types.js';
 // propagation:
 //   - streamie drains          -> writable.end(), resolve once it has flushed
 //   - streamie aborts/halts    -> writable.destroy(error), and the returned promise
-//                                 rejects with that error
+//                                 rejects with that error — including while the loop is
+//                                 parked on sink backpressure (the halt wakes the park,
+//                                 so a wedged sink can't hide a source failure)
 //   - sink write/error         -> streamie.abort(error), so the pipeline upstream stops
 //                                 producing into a dead sink, and the returned promise
 //                                 rejects with that error
@@ -29,6 +32,12 @@ export default function toWritable<O>(
   streamie: Streamie<any, O, any>,
   writable: Writable,
 ): Promise<void> {
+  // The consumer is registered synchronously, before the sink is touched: registering
+  // on a sink streamie throws, and that argument error must surface at the call —
+  // matching toReadable — rather than fall through the failure paths below, where it
+  // would read as a source failure and destroy the caller's healthy writable.
+  const iterator = streamie[Symbol.asyncIterator]();
+
   return new Promise<void>((resolve, reject) => {
     let isSettled = false;
     // Distinguishes the two failure directions for settle(): a sink failure must abort
@@ -36,9 +45,20 @@ export default function toWritable<O>(
     let isSinkFailure = false;
 
     // Releases a pending waitForDrain park, if any. Set while the loop is waiting on
-    // 'drain'; invoked by 'drain' itself, or by a sink 'error'/'close' that would
-    // otherwise leave the loop waiting on a 'drain' that never comes.
+    // 'drain'; invoked by 'drain' itself, or by a sink 'error'/'close' — or a source
+    // halt — that would otherwise leave the loop waiting on a 'drain' that never comes.
     let releaseDrain: (() => void) | null = null;
+
+    // A source-side halt while the loop is parked on sink backpressure would otherwise
+    // go unobserved until the sink drains — which a wedged sink never does. Waking the
+    // park lets the loop's next iterator step observe the halt (a rejection carrying
+    // the terminating error), which settles through the source-failure branch below and
+    // destroys the sink with it. onHalted latches, so a source already halted at call
+    // time invokes this immediately (releaseDrain is null then; the loop's first
+    // iterator step delivers the error).
+    const unsubscribeHalt: Unsubscribe = streamie.onHalted(() => {
+      releaseDrain?.();
+    });
 
     const onSinkError = (error: Error) => {
       // The sink emitted 'error' (an asynchronous _write/_final failure). Mark it a
@@ -68,6 +88,7 @@ export default function toWritable<O>(
     function settle(error?: unknown) {
       if (isSettled) return;
       isSettled = true;
+      unsubscribeHalt();
       writable.removeListener('error', onSinkError);
       writable.removeListener('close', onSinkClose);
       if (error === undefined) {
@@ -76,8 +97,8 @@ export default function toWritable<O>(
       }
       if (isSinkFailure) {
         // The sink is already failing; stop the source producing into it. (The sink
-        // needs no teardown — it tore itself down, having emitted the 'error' that
-        // onSinkError already consumed.)
+        // needs no teardown — it tore itself down, having delivered the failure that
+        // routed here.)
         streamie.abort(error);
       } else {
         // A source-side failure (an abort or a propagated handler error): tear down the
@@ -105,14 +126,22 @@ export default function toWritable<O>(
       });
     }
 
+    // A writable that is already destroyed or ended can never deliver the signals the
+    // paths below rely on: its 'close' fired before these listeners attached (never to
+    // fire again), and a write to a destroyed stream merely returns false without
+    // emitting 'error' — which would park the loop on a 'drain' that never comes.
+    // Fail fast with the same premature-close sink failure an early close settles
+    // with (aborting the source, which was already registered above).
+    if (writable.destroyed || writable.writableEnded) onSinkClose();
+
     (async () => {
-      for await (const item of streamie) {
+      for await (const item of iterator) {
         if (isSettled) return;
         let canContinue: boolean;
         try {
           canContinue = writable.write(item);
         } catch (error) {
-          // A synchronous write failure (e.g. writing after the sink ended/destroyed).
+          // A synchronous write failure (e.g. an invalid chunk type for a byte sink).
           isSinkFailure = true;
           throw error;
         }
@@ -121,13 +150,23 @@ export default function toWritable<O>(
           if (isSettled) return;
         }
       }
-      // The streamie drained: close the sink and resolve once it has flushed. The end
-      // callback fires on 'finish' — only on a clean close. A failure during the sink's
-      // final flush does not reach this callback (it is not passed an error); it surfaces
-      // as an 'error' event instead, which onSinkError settles (as a sink failure)
-      // before 'finish' is ever reached. So both outcomes are covered without inspecting
-      // an end error here.
-      writable.end(() => settle());
+      // The streamie drained: close the sink and resolve once it has flushed. The
+      // callback's error argument is load-bearing: when a final-flush (or a write still
+      // buffered at end()) fails *asynchronously*, Node invokes this callback with the
+      // error BEFORE emitting 'error' — so onSinkError cannot be relied on to have
+      // settled first (it has only when the failure was synchronous, where the ordering
+      // inverts). Ignoring the argument here would resolve the pipe as successful and
+      // then leave the subsequent 'error' emission unlistened (settle removes
+      // onSinkError), crashing the process.
+      writable.end((error?: Error | null) => {
+        if (error === undefined || error === null) return settle();
+        if (isSettled) return;
+        // Route it as a sink failure, and swallow the 'error' re-emission that follows
+        // this callback in the asynchronous ordering.
+        isSinkFailure = true;
+        writable.once('error', () => {});
+        settle(error);
+      });
     })().catch((error) => {
       // The iteration failed — a source-side abort or propagated handler error — unless
       // a synchronous write marked it a sink failure above. settle routes each.

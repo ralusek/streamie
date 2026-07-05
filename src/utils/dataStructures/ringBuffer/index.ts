@@ -43,6 +43,13 @@ export default class RingBuffer<T> {
   private count = 0;
 
   constructor(initialCapacity = 16) {
+    // Construction is not a hot path, so garbage capacities are rejected up front
+    // with a clear error: a non-finite request would otherwise double forever (or
+    // overflow into an opaque "Invalid array length" RangeError), and a negative one
+    // would silently produce the minimum capacity as if it were meaningful.
+    if (!Number.isFinite(initialCapacity) || initialCapacity < 0) {
+      throw new Error(`RingBuffer initialCapacity must be a finite, non-negative number (received ${initialCapacity}).`);
+    }
     // Round the requested capacity up to a power of two (minimum 16) so the
     // wrap-around bitmask invariant holds regardless of what the caller passes.
     let capacity = 16;
@@ -91,6 +98,13 @@ export default class RingBuffer<T> {
    * Replaces the `splice(0, batchSize)` batching idiom.
    */
   shiftMany(max: number): T[] {
+    // One cheap guard on the hot path (Number.isInteger is an engine intrinsic): a
+    // negative or fractional max would otherwise corrupt the cursor arithmetic or
+    // surface as an opaque RangeError from the array allocation below. max of 0 is
+    // legitimate and returns an empty array without touching the cursors.
+    if (!Number.isInteger(max) || max < 0) {
+      throw new Error(`RingBuffer shiftMany max must be a non-negative integer (received ${max}).`);
+    }
     const n = max < this.count ? max : this.count;
     const out: T[] = new Array(n);
     const mask = this.buffer.length - 1;
@@ -102,6 +116,21 @@ export default class RingBuffer<T> {
     this.head = (this.head + n) & mask;
     this.count -= n;
     return out;
+  }
+
+  /**
+   * Empties the buffer without releasing its backing array: every slot is cleared so
+   * the dropped items are no longer reachable through the buffer (the same
+   * collectability rationale as shift), the cursors reset, and the current capacity
+   * is retained for reuse. O(capacity), which is fine off the hot path — this exists
+   * for wholesale abandonment (e.g. a halt discarding a queue's remaining items),
+   * not per-item flow.
+   */
+  clear(): void {
+    this.buffer.fill(undefined);
+    this.head = 0;
+    this.tail = 0;
+    this.count = 0;
   }
 
   /**

@@ -1,5 +1,9 @@
 import streamie from '../src';
 import { fromReadableStream, toReadableStream, toWritableStream } from '../src/web';
+// The pump itself (fromReadableStream's engine), imported directly so it can be
+// exercised against a streamie in states the public factory can never hand it
+// (already terminal).
+import pumpReadableStream from '../src/utils/streams/readable';
 // ReadableStream/WritableStream/CountQueuingStrategy are web-platform globals (present
 // on Node >= 18, the package's WHATWG floor), the same surface a browser consumer uses —
 // no node:stream/web import needed now that the bridges speak the real global types.
@@ -258,6 +262,69 @@ describe('WHATWG stream bridges', () => {
       // (and holding timers open) after the test.
       s.abort();
     });
+
+    test('aborting while the pump is parked on backpressure stops pulling and cancels the stream', async () => {
+      let cancelReason: unknown = 'not cancelled';
+      let pulls = 0;
+      const stream = new ReadableStream<number>({
+        pull(controller) { pulls += 1; controller.enqueue(pulls); },
+        cancel(reason) { cancelReason = reason; },
+      }, new CountQueuingStrategy({ highWaterMark: 1 }));
+
+      // No consumer: the pipeline absorbs nothing, so the pump parks in
+      // waitForCapacity. The abort must release that park (onHalted resolves it),
+      // land in the stopped check, and cancel the reader with the abort error.
+      const s = fromReadableStream(stream, { backpressureAt: 2 });
+      await delay(20);
+      const parkedAt = pulls;
+      const error = new Error('bye');
+      s.abort(error);
+      await delay(20);
+
+      expect(pulls).toBeLessThanOrEqual(parkedAt + 1);
+      expect(cancelReason).toBe(error);
+      expect(stream.locked).toBe(false);
+    });
+
+    test('pumping into an already-drained target cancels the stream before any read', async () => {
+      // The latched onDraining fires stop() synchronously *during* the pump's first
+      // subscription — the ordering that once leaked the second subscription.
+      let isCancelled = false;
+      const stream = new ReadableStream<number>({
+        pull(controller) { controller.enqueue(1); },
+        cancel() { isCancelled = true; },
+      });
+
+      const s = streamie((input: number) => input, {});
+      s.drain();
+      await s.promise;
+
+      pumpReadableStream(stream, s);
+      await delay(5);
+
+      expect(isCancelled).toBe(true);
+      expect(stream.locked).toBe(false);
+    });
+
+    test('pumping into an already-aborted target cancels the stream with the abort error', async () => {
+      // The latched onHalted fires stop() synchronously during the pump's *second*
+      // subscription, after the first was already tracked — the other ordering.
+      let cancelReason: unknown = 'not cancelled';
+      const stream = new ReadableStream<number>({
+        pull(controller) { controller.enqueue(1); },
+        cancel(reason) { cancelReason = reason; },
+      });
+
+      const s = streamie((input: number) => input, {});
+      const error = new Error('already gone');
+      s.abort(error);
+
+      pumpReadableStream(stream, s);
+      await delay(5);
+
+      expect(cancelReason).toBe(error);
+      expect(stream.locked).toBe(false);
+    });
   });
 
   describe('toWritableStream', () => {
@@ -384,6 +451,109 @@ describe('WHATWG stream bridges', () => {
       expect(written).toBeGreaterThan(5);
       expect(pushed).toBeLessThan(written + 10);
     });
+
+    test('a sink erroring while the source is idle rejects and aborts the streamie', async () => {
+      // pipeTo's backward error propagation: with no write in flight to reject, the
+      // sink's death is only observable through writer.closed. Unwatched, the pipe
+      // would park on the next source item forever and the pipeline upstream would
+      // keep producing into a dead sink.
+      let ctrl: any;
+      const stream = new WritableStream<number>({
+        start(controller) { ctrl = controller; },
+        write() {},
+      });
+
+      const s = streamie((input: number) => input, {});
+      const piped = toWritableStream(s, stream);
+      s.push(1);
+      await delay(10); // item 1 flushed; the loop is idle awaiting the next source item
+      const error = new Error('sink died');
+      ctrl.error(error);
+
+      await expect(piped).rejects.toBe(error);
+      expect(s.state.isAborted).toBe(true);
+      await expect(s.promise).rejects.toBe(error);
+    });
+
+    test('a source abort releases a park on sink backpressure and aborts the sink', async () => {
+      // highWaterMark 0 keeps writer.ready permanently pending (the queue is always
+      // "full"), so only the source halt itself can wake the parked loop — the WHATWG
+      // analogue of the Node bridge's wedged-'drain' case.
+      let abortReason: unknown = 'not aborted';
+      const stream = new WritableStream<number>({
+        write() {},
+        abort(reason) { abortReason = reason; },
+      }, new CountQueuingStrategy({ highWaterMark: 0 }));
+
+      const s = streamie((input: number) => input, {});
+      const piped = toWritableStream(s, stream);
+      s.push(1);
+      await delay(10); // the loop holds item 1, parked on ready
+      const error = new Error('source gone');
+      s.abort(error);
+
+      await expect(piped).rejects.toBe(error);
+      expect(abortReason).toBe(error);
+      expect(stream.locked).toBe(false);
+    });
+
+    test('a source abort that wakes a backpressure park does not write the held chunk', async () => {
+      // The loop is parked on writer.ready holding an already-yielded chunk. When
+      // the source halt is what wakes the park, that chunk must be dropped — the
+      // source is dead, and pipeTo's error propagation aborts the destination; it
+      // does not slip one final write in ahead of the abort.
+      const written: number[] = [];
+      const stream = new WritableStream<number>({
+        write(chunk) { written.push(chunk); },
+      }, new CountQueuingStrategy({ highWaterMark: 0 }));
+
+      const s = streamie((input: number) => input, {});
+      const piped = toWritableStream(s, stream);
+      s.push(1);
+      await delay(10); // the loop holds item 1, parked on ready
+      s.abort(new Error('source gone'));
+
+      await expect(piped).rejects.toThrow('source gone');
+      expect(written).toEqual([]);
+    });
+
+    test('paces by the sink queuing strategy rather than awaiting each write', async () => {
+      // pipeTo pacing: chunks are handed over as long as the queue has capacity, so a
+      // high water mark above 1 buys real pipelining. The strategy's size() callback
+      // counts chunks accepted by the writer — the old await-per-write pacing would
+      // have accepted exactly one while the first write is wedged.
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const written: number[] = [];
+      let accepted = 0;
+      const stream = new WritableStream<number>({
+        async write(chunk) { written.push(chunk); await gate; },
+      }, { highWaterMark: 4, size() { accepted += 1; return 1; } });
+
+      const s = streamie((input: number) => input, {});
+      const piped = toWritableStream(s, stream);
+      for (let i = 1; i <= 10; i += 1) s.push(i);
+      s.drain();
+
+      await delay(20);
+      expect(written).toEqual([1]);
+      expect(accepted).toBeGreaterThanOrEqual(4);
+
+      release();
+      await piped;
+      expect(written).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    });
+
+    test('throws synchronously on a sink streamie without touching the sink', () => {
+      // The argument error must surface at the call (matching toReadableStream) rather
+      // than route through the failure paths and abort the caller's healthy sink.
+      const s = streamie((input: number) => input, {});
+      const sink = s.each(() => {});
+      const stream = new WritableStream<number>({ write() {} });
+
+      expect(() => toWritableStream(sink as any, stream)).toThrow('Cannot register an output on a sink streamie.');
+      expect(stream.locked).toBe(false);
+    });
   });
 
   describe('toReadableStream', () => {
@@ -472,7 +642,7 @@ describe('WHATWG stream bridges', () => {
       const s = streamie((input: number) => input, {});
       const sink = s.each((item) => item);
 
-      expect(() => toReadableStream(sink)).toThrow('Cannot register an output on a sink streamie.');
+      expect(() => toReadableStream(sink as any)).toThrow('Cannot register an output on a sink streamie.');
     });
 
     test('an already-drained streamie produces an immediately-closing stream', async () => {
@@ -560,6 +730,35 @@ describe('WHATWG stream bridges', () => {
       s.drain();
 
       expect(await readAll<number>(toReadableStream(s, { highWaterMark: 4 }))).toEqual([1, 2, 3]);
+    });
+
+    test('cancelling while a read is pending on an idle streamie settles the read as done', async () => {
+      // A cancel landing while a pull's iterator.next() is in flight: the pending read
+      // must settle (as done), the consumer must detach, and the streamie must be
+      // untouched — not left with a stranded pull or an aborted pipeline.
+      const s = streamie((input: number) => input, {});
+      const reader = toReadableStream(s).getReader() as any;
+
+      const pending = reader.read(); // parked: the streamie has produced nothing yet
+      await delay(5);
+      await reader.cancel();
+
+      expect((await pending).done).toBe(true);
+      await delay(5);
+      expect(s.state.isHalted).toBe(false);
+      expect(s.state.isDrained).toBe(false);
+    });
+
+    test('two concurrent stream consumers each receive every item (broadcast)', async () => {
+      const s = streamie((input: number) => input, {});
+      const s1 = toReadableStream(s);
+      const s2 = toReadableStream(s);
+      [1, 2, 3].forEach((item) => s.push(item));
+      s.drain();
+
+      const [a, b] = await Promise.all([readAll<number>(s1), readAll<number>(s2)]);
+      expect(a).toEqual([1, 2, 3]);
+      expect(b).toEqual([1, 2, 3]);
     });
   });
 

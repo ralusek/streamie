@@ -1,5 +1,5 @@
 import streamie from '../dist/esm/index.js';
-import type { Streamie, StreamieHaltPayload, Tools } from '../dist/esm/types.js';
+import type { Streamie, SinkStreamie, StreamieHaltPayload, Tools } from '../dist/esm/types.js';
 import type { StreamieQueueError } from '../dist/esm/error/index.js';
 
 /*
@@ -255,10 +255,13 @@ source1.map((value, { push }) => {
   // @ts-expect-error handler helper push accepts exactly one input item
   push(1, 2);
 
-  // The tools push exposes the synchronous receipt metadata (but not the receipt's
-  // promise, whose type would be circular with the handler's own return type).
+  // The tools push is the receipt-free form, returning the bare backpressure
+  // boolean; push.withReceipt exposes the receipt's synchronous metadata (but not
+  // its promise, whose type would be circular with the handler's own return type).
   const toolsPushResult = push(value);
-  type ToolsPush_Backpressure = Expect<Equal<typeof toolsPushResult.backpressure, boolean>>;
+  type ToolsPush_Backpressure = Expect<Equal<typeof toolsPushResult, boolean>>;
+  const toolsTracked = push.withReceipt(value);
+  type ToolsTracked_Backpressure = Expect<Equal<typeof toolsTracked.backpressure, boolean>>;
 
   return value * 2;
 });
@@ -267,7 +270,7 @@ source1.map((value, { push }) => {
 // Push receipts
 // ---------------------------------------------------------------------------
 
-const pushReceipt = source1.push(1);
+const pushReceipt = source1.push.withReceipt(1);
 
 export type PushReceipt_Backpressure = Expect<
   Equal<typeof pushReceipt.backpressure, boolean>
@@ -282,7 +285,7 @@ export type PushReceipt_Output_NotAny = Expect<NotAny<
 >>;
 
 // A batch stage's receipt resolves with the batch the item joined.
-const batchReceipt = batched.push(1);
+const batchReceipt = batched.push.withReceipt(1);
 
 export type BatchReceipt_Output = Expect<
   Equal<typeof batchReceipt.promise, Promise<number[]>>
@@ -329,12 +332,13 @@ source1.onHalted(() => {});
 
 // Sinks: each is a terminal map (handler inference unchanged), sink() appends an
 // identity terminal stage, and sink: true is plain config — as is keepAlive, the
-// opt-out from the downstream halt cascade.
+// opt-out from the downstream halt cascade. Both combinators return SinkStreamie,
+// which omits the consumer-attaching members (asserted in sugar.type-test.ts).
 const stringifier = streamie((value: number) => String(value), {});
 const eached = stringifier.each((value) => value.length);
-export type Each_Streamie = Expect<Equal<typeof eached, Streamie<string, number>>>;
+export type Each_Streamie = Expect<Equal<typeof eached, SinkStreamie<string, number>>>;
 const sunk = stringifier.map((value) => value.length).sink();
-export type Sink_Streamie = Expect<Equal<typeof sunk, Streamie<number, number>>>;
+export type Sink_Streamie = Expect<Equal<typeof sunk, SinkStreamie<number, number>>>;
 streamie((value: number) => value, { sink: true });
 streamie((value: number) => value, { keepAlive: true });
 

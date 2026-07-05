@@ -47,8 +47,14 @@ export default function toReadable<O>(
   options?: ReadableOptions,
 ): Readable {
   const objectMode = options?.objectMode ?? true;
+  // Nullish coalescing rather than spread order, so an explicit
+  // `highWaterMark: undefined` in options can't clobber the tight object-mode default
+  // back to Readable.from's 16 (a spread carries the undefined-valued key over the
+  // default). In byte mode with no caller value this passes undefined through, which
+  // Node treats the same as an absent option.
+  const highWaterMark = options?.highWaterMark ?? (objectMode ? 1 : undefined);
   return Readable.from(streamie, {
-    ...(objectMode ? { highWaterMark: 1 } : {}),
     ...options,
+    highWaterMark,
   });
 }

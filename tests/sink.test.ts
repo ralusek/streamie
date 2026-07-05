@@ -81,7 +81,7 @@ describe('sinks and output retention', () => {
 
   test('push receipts on a sink still resolve with the handler output', async () => {
     const s = streamie((input: number) => input * 2, { sink: true });
-    const receipt = s.push(21);
+    const receipt = s.push.withReceipt(21);
     await expect(receipt.promise).resolves.toBe(42);
   });
 });

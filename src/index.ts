@@ -2,6 +2,7 @@
 import { StreamieQueueError } from './error/index.js';
 import type {
   Streamie,
+  SinkStreamie,
   Handler,
   FilterHandler,
   Config,
@@ -22,8 +23,53 @@ import createEventHandlers, { event, type Unsubscribe } from './utils/events/ind
 import PushReceipt from './utils/pushReceipt/index.js';
 import yieldToMacrotask from './utils/yieldToMacrotask/index.js';
 import currentSliceAge from './utils/eventLoopSlice/index.js';
+import waitForCapacity from './utils/streams/waitForCapacity.js';
+import type { NormalizedRetry } from './validation/retry/index.js';
 
 type TimeoutId = ReturnType<typeof setTimeout>;
+
+// Races an asynchronous handler result against a timer. A synchronous result cannot
+// have timed out, so it passes through untouched (preserving the sync fast path).
+// The underlying work is not cancelled — the handler's promise keeps running — but
+// its late settlement is ignored: the returned promise has already rejected.
+function withTimeout<T>(result: MaybePromise<T>, ms: number): MaybePromise<T> {
+  if (!result || (typeof (result as PromiseLike<T>).then !== 'function')) return result;
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Handler invocation timed out after ${ms}ms.`)), ms);
+    (result as Promise<T>).then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (err) => { clearTimeout(timer); reject(err); },
+    );
+  });
+}
+
+// Runs an invocation with retries: a failed attempt (sync throw or rejection) is
+// re-attempted — after the configured delay — until it succeeds or the attempts are
+// exhausted, at which point the last error propagates to the caller unchanged (a
+// sync throw when the final attempt failed synchronously, a rejection otherwise,
+// matching how processInput already handles both). A successful synchronous first
+// attempt stays on the sync fast path.
+function invokeWithRetry(run: () => MaybePromise<unknown>, retry: NormalizedRetry): MaybePromise<unknown> {
+  const retryOrRethrow = (err: unknown, attempt: number): MaybePromise<unknown> => {
+    if (attempt >= retry.attempts) throw err;
+    const delay = retry.delay(attempt + 1);
+    if (delay > 0) return new Promise((resolve) => setTimeout(resolve, delay)).then(() => attemptOnce(attempt + 1));
+    return attemptOnce(attempt + 1);
+  };
+  const attemptOnce = (attempt: number): MaybePromise<unknown> => {
+    let result: MaybePromise<unknown>;
+    try {
+      result = run();
+    } catch (err) {
+      return retryOrRethrow(err, attempt);
+    }
+    if (result && (typeof (result as PromiseLike<unknown>).then === 'function')) {
+      return (result as Promise<unknown>).then(undefined, (err) => retryOrRethrow(err, attempt));
+    }
+    return result;
+  };
+  return attemptOnce(0);
+}
 
 // Decoupled-output form: with automaticallyEmit: false the handler produces output
 // through tools.emit rather than its return value, so the output type O is the caller's
@@ -108,7 +154,7 @@ function streamieInternal<I, R>(
 
   const settings = {
     backpressureAt: validate.backpressureAt(config),
-    concurrency: config.concurrency || 1,
+    concurrency: validate.concurrency(config),
     batchSize: internalConfig.batchSize || 1,
     // The batch size as configured (null when unbatched), kept distinct from the
     // coerced batchSize above. That one is the dequeue count, where 1 and "unbatched"
@@ -117,7 +163,11 @@ function streamieInternal<I, R>(
     // unbatched streamie — even though both dequeue one item at a time. The core only
     // ever reads batchSize; this exists for introspection (see isBatched).
     configuredBatchSize: internalConfig.batchSize ?? null,
-    maxBatchWait: internalConfig.maxBatchWait || Infinity,
+    maxBatchWait: validate.maxBatchWait(internalConfig.maxBatchWait),
+    // Normalized retry/timeout settings (null when off). Invocations are wrapped only
+    // when configured, so the default path pays nothing for either.
+    retry: validate.retry(config),
+    timeout: validate.timeout(config),
     haltOnError: config.haltOnError !== false,
     propagateErrors: config.propagateErrors !== false,
     yieldAfter: config.yieldAfter ?? 100,
@@ -137,6 +187,15 @@ function streamieInternal<I, R>(
       handling: number;
     };
     lastHandledAt: number | null;
+    // When the current partial batch began accumulating: stamped when the input queue
+    // goes from empty to non-empty, restarted when a dequeue leaves items behind, and
+    // cleared when the queue empties. This — not lastHandledAt — is what maxBatchWait
+    // measures against: "how long has the oldest waiting item been waiting", so the
+    // very first batch has a working window (lastHandledAt is null before the first
+    // invocation) and an idle gap between batches doesn't count against the next item
+    // (which would flush it immediately as a spurious singleton batch). Only
+    // maintained when maxBatchWait is finite, so unbatched streamies pay nothing.
+    partialBatchSince: number | null;
     backpressure: {
       input: boolean;
       output: boolean;
@@ -160,6 +219,7 @@ function streamieInternal<I, R>(
       handling: 0,
     },
     lastHandledAt: null,
+    partialBatchSince: null,
     // Backpressure slowly builds backwards. If you imagine that a downstream streamie has input backpressure,
     // this streamie will stop pushing to it. This means that eventually this streamie will have output backpressure,
     // and we will stop handling items. This means that eventually this streamie will have input backpressure, and
@@ -237,6 +297,12 @@ function streamieInternal<I, R>(
 
     processScheduled: boolean;
 
+    // Whether a maxBatchWait retry timer is currently pending. Without this guard,
+    // every push into a partial batch would schedule its own timer (one per push,
+    // each rescheduling itself on fire) — one pending flush check at a time is
+    // enough.
+    batchRetryScheduled: boolean;
+
     // Whether a macrotask yield is currently pending (see scheduleYield).
     yieldScheduled: boolean;
   } = {
@@ -255,6 +321,7 @@ function streamieInternal<I, R>(
     externalPromise: null,
     timeouts: new Set(),
     processScheduled: false,
+    batchRetryScheduled: false,
     yieldScheduled: false,
   };
 
@@ -275,10 +342,28 @@ function streamieInternal<I, R>(
     // A sink's handler is the endpoint: its outputs go nowhere by declaration, and
     // consumers can never be registered on it, so the output queue would be pure
     // overhead — skip it entirely. (Receipts still resolve with the handler output;
-    // they were settled by the caller, not by this queue.)
-    if (settings.isSink) return;
+    // they were settled by the caller, not by this queue.) A halted streamie never
+    // delivers again either, so an in-flight invocation settling after a halt must
+    // not park its output in the queue — that would just pin the value in memory on
+    // a stage that setHalted already emptied.
+    if (settings.isSink || state.isHalted) return;
     queue.output.success.push(handlerOutput as OutputItem);
   }
+
+  // The handler as actually invoked by processInput: wrapped for per-attempt timeout
+  // and/or retries only when configured, so the default path costs nothing. Timeout
+  // wraps the single attempt and retry wraps the timed attempt, so a timed-out
+  // attempt is retried like any other failure and each attempt gets a fresh window.
+  const invokeHandler: (input: I | I[], tools: Tools<I>) => MaybePromise<unknown> = (() => {
+    const base = handler as (input: I | I[], tools: Tools<I>) => MaybePromise<unknown>;
+    const timeout = settings.timeout;
+    const timed = timeout === null
+      ? base
+      : (input: I | I[], tools: Tools<I>) => withTimeout(base(input, tools), timeout);
+    const retry = settings.retry;
+    if (retry === null) return timed;
+    return (input: I | I[], tools: Tools<I>) => invokeWithRetry(() => timed(input, tools), retry);
+  })();
 
   // The general output primitive handed to handlers as tools.emit: append a value to
   // this stage's output queue for delivery to consumers. A stable reference — it closes
@@ -348,6 +433,12 @@ function streamieInternal<I, R>(
         ? queue.receipt.shift()
         : queue.receipt.shiftMany(settings.batchSize));
 
+    // Items left behind by this dequeue begin a fresh partial batch as of now; an
+    // emptied queue has no partial batch until the next push stamps one.
+    if (settings.maxBatchWait !== Infinity) {
+      state.partialBatchSince = queue.input.length > 0 ? state.lastHandledAt : null;
+    }
+
     if (startedWithBackpressure && !state.backpressure.input) {
       eventHandlers.backpressureRelease.emit();
     }
@@ -373,7 +464,7 @@ function streamieInternal<I, R>(
 
     let handlerOutput: MaybePromise<unknown>;
     try {
-      handlerOutput = (handler as (input: I | I[], tools: Tools<I>) => MaybePromise<unknown>)(
+      handlerOutput = invokeHandler(
         handlerInput, {
           drain: self.drain,
           push: self.push,
@@ -446,28 +537,21 @@ function streamieInternal<I, R>(
     // The single clock read for this process iteration; the yield check in
     // requestProcess reuses it via lastClockAt rather than reading again.
     lastClockAt = Date.now();
-    const timeSinceLastHandled = state.lastHandledAt && lastClockAt - state.lastHandledAt;
 
-    // This top level condition establishes a normal condition under which we would not handle
-    // the items, as there aren't enough to justify a batch. However, we will handle them
-    // given the exceptions below
-    if (queue.input.length < settings.batchSize) {
-      if (
-        // If the queue is meant to be drained, even if the input queue is not a full batch,
-        // we will still handle it.
-        (!state.shouldDrain) &&
-        // If we have waited too long since the last handled batch, we will handle the items
-        !(timeSinceLastHandled && (timeSinceLastHandled > settings.maxBatchWait))
-      ) {
-
-        // At this point, we're already not going to handle the items the process, but if
-        // there is a maxBatchWait configured, we will ensure that there is a timeout in place
-        // to call processInput after the maxBatchWait time has elapsed. This is because the
-        // qualification for maxBatchWait time could elapse and be qualified for a process, but
-        // no attempt to process would necessarily be invoked at that time.
-        if (settings.maxBatchWait && (settings.maxBatchWait !== Infinity)) return { canProcess: false, scheduleRetryIn: settings.maxBatchWait - (timeSinceLastHandled || 0)};
-        return { canProcess: false };
-      }
+    // Not enough queued for a full batch: normally wait, with two exceptions — a
+    // drain flushes whatever remains, and a finite maxBatchWait flushes a partial
+    // batch once its oldest item has waited that long (measured from
+    // partialBatchSince — when this partial batch began accumulating — NOT from the
+    // last handled invocation, which would both leave the first-ever batch waiting
+    // forever and count idle time between batches against a freshly arrived item).
+    if ((queue.input.length < settings.batchSize) && !state.shouldDrain) {
+      if (settings.maxBatchWait === Infinity) return { canProcess: false };
+      const waited = state.partialBatchSince === null ? 0 : lastClockAt - state.partialBatchSince;
+      // Not yet due: ask the caller to ensure a flush check runs once it is. The
+      // qualification could otherwise be reached at a moment when nothing happens to
+      // invoke processing.
+      if (waited < settings.maxBatchWait) return { canProcess: false, scheduleRetryIn: settings.maxBatchWait - waited };
+      // Due: flush the partial batch.
     }
 
     return { canProcess: true };
@@ -486,12 +570,15 @@ function streamieInternal<I, R>(
       // streamie outright (see handleConsumerHalted), unless keepAlive opted out.
       // (A sink never reaches here: its outputs skip the queue, so length above is
       // always 0.)
-      (outputStreamies.size === 0) ||
-      // TODO should allow different strategies, but for now we will say that if any consumer
-      // is backpressured, no other outputStreamies will be pushed to, as this could allow a queue
-      // to grow indefinitely.
-      (Array.from(outputStreamies).some((consumer) => consumer.state.backpressure.input))
+      (outputStreamies.size === 0)
     ) return { canProcess: false };
+    // TODO should allow different strategies, but for now we will say that if any consumer
+    // is backpressured, no other outputStreamies will be pushed to, as this could allow a queue
+    // to grow indefinitely. (Iterated directly rather than via Array.from — this check
+    // runs once per delivered output, so a per-call array allocation is real overhead.)
+    for (const consumer of outputStreamies) {
+      if (consumer.state.backpressure.input) return { canProcess: false };
+    }
     return { canProcess: true };
   }
 
@@ -507,10 +594,14 @@ function streamieInternal<I, R>(
     while (activity) {
       activity = false;
       const { canProcess: canProcessInput, scheduleRetryIn } = checkCanProcessInput();
-      if (scheduleRetryIn) {
+      // One pending flush-check timer at a time: every push into a partial batch
+      // lands here, and each would otherwise add its own timer.
+      if (scheduleRetryIn && !ref.batchRetryScheduled) {
+        ref.batchRetryScheduled = true;
         const timeoutId = setTimeout(() => {
-          requestProcess();
           ref.timeouts.delete(timeoutId);
+          ref.batchRetryScheduled = false;
+          requestProcess();
         }, scheduleRetryIn);
         ref.timeouts.add(timeoutId);
       }
@@ -620,8 +711,7 @@ function streamieInternal<I, R>(
     // would otherwise never settle, deadlocking their awaiters. Reject them with the
     // same error the streamie's promise rejects with. In-flight invocations are
     // unaffected: their receipts were dequeued with their items and settle on their
-    // own. (This leaves the receipt queue empty while the input queue is not, but a
-    // halted streamie never dequeues input again, so the alignment is moot.)
+    // own.
     if (queue.receipt !== null) {
       const error = state.isAborted
         ? (state.abortError === undefined ? new Error('Streamie was aborted.') : state.abortError)
@@ -630,6 +720,11 @@ function streamieInternal<I, R>(
         queue.receipt.shift()?._reject(error);
       }
     }
+    // The abandoned items themselves are released too: a halted streamie never
+    // dequeues again, but a handle to it is often retained (to read state.lastError,
+    // say), and holding the queues would pin every abandoned item in memory with it.
+    queue.input.clear();
+    queue.output.success.clear();
     eventHandlers.halted.emit({
       isAborted: state.isAborted,
       abortError: state.abortError,
@@ -639,18 +734,28 @@ function streamieInternal<I, R>(
 
 
   // Public functions
-  function push(item: I): PushReceipt<OutputItem> {
+
+  // The tracked push, exposed as push.withReceipt: allocates a PushReceipt recording
+  // this item's eventual outcome. The plain push below is the canonical form; this is
+  // the opt-in for producers that await individual items.
+  function pushWithReceipt(item: I): PushReceipt<OutputItem> {
     if (state.isHalted) throw new Error('Cannot push to a halted streamie.');
     if (state.shouldDrain) throw new Error(`Cannot push to a ${ state.isDrained ? 'drained' : 'draining'} streamie.`);
 
-    // Receipt tracking activates on the first push rather than up front, so that
-    // streamies fed only by upstream streamies never pay for it. Items already queued
-    // at activation (delivered via _receive) have no receipts, so their slots are
-    // backfilled with undefined to establish the slot-for-slot alignment with the
-    // input queue that processInput relies on.
+    // Receipt tracking activates on the first tracked push rather than up front, so
+    // that streamies never pushed to with receipts never pay for it. Items already
+    // queued at activation (delivered via _receive or the plain push) have no
+    // receipts, so their slots are backfilled with undefined to establish the
+    // slot-for-slot alignment with the input queue that processInput relies on.
     if (queue.receipt === null) {
       queue.receipt = new RingBuffer();
       for (let i = queue.input.length; i > 0; i--) queue.receipt.push(undefined);
+    }
+
+    // An empty queue means this item begins a new partial batch; its wait window
+    // starts now (see partialBatchSince).
+    if ((settings.maxBatchWait !== Infinity) && (queue.input.length === 0) && (state.partialBatchSince === null)) {
+      state.partialBatchSince = Date.now();
     }
 
     queue.input.push(item);
@@ -660,6 +765,43 @@ function streamieInternal<I, R>(
     scheduleProcess();
     return receipt;
   }
+
+  // The canonical push: receipt-free. The item's individual outcome is not
+  // observable — no PushReceipt is allocated, and receipt tracking is never
+  // activated on its account, preserving the null-queue.receipt fast path through
+  // processInput. Returns whether the push left the streamie at or beyond its input
+  // backpressure threshold (true = backpressured, matching the library's backpressure
+  // vocabulary and the INVERSE of Node's writable.write()), which is all a
+  // cooperative producer needs for pacing.
+  //
+  // Receipt-free is the default deliberately: a receipt costs an allocation per item
+  // plus settlement bookkeeping per invocation, pure waste for the fire-and-forget
+  // majority — the stream pumps (from, fromReadable, fromReadableStream), the
+  // deferred seed, and the self-feeding paginator pattern all land here. Producers
+  // that await individual outcomes opt in via push.withReceipt.
+  function push(item: I): boolean {
+    if (state.isHalted) throw new Error('Cannot push to a halted streamie.');
+    if (state.shouldDrain) throw new Error(`Cannot push to a ${ state.isDrained ? 'drained' : 'draining'} streamie.`);
+
+    // See the note on push: an empty queue means this item begins a new partial
+    // batch, and its wait window starts now.
+    if ((settings.maxBatchWait !== Infinity) && (queue.input.length === 0) && (state.partialBatchSince === null)) {
+      state.partialBatchSince = Date.now();
+    }
+
+    queue.input.push(item);
+    // If a tracked push has already activated receipt tracking, the slot-for-slot
+    // alignment processInput relies on must be preserved: this item occupies a
+    // receipt slot, just an empty one (exactly as _receive-delivered items do).
+    if (queue.receipt !== null) queue.receipt.push(undefined);
+
+    scheduleProcess();
+    return state.backpressure.input;
+  }
+
+  // One conceptual entry point, two forms — mirroring the events API's on/on.once:
+  // push(item) is the cheap default, push.withReceipt(item) the tracked variant.
+  const pushPublic = Object.assign(push, { withReceipt: pushWithReceipt });
 
   function withInheritedDefaults(config: Config): Config {
     return {
@@ -686,17 +828,20 @@ function streamieInternal<I, R>(
   function each<NR>(
     handler: Handler<OutputItem, NR>,
     config: Config = {},
-  ): Streamie<OutputItem, Awaited<NR>> {
-    return map(handler, { ...config, sink: true });
+  ): SinkStreamie<OutputItem, Awaited<NR>> {
+    // The SinkStreamie cast narrows, not widens: the runtime object is a full
+    // streamie whose consumer-attaching methods throw; the type simply stops
+    // offering them (see SinkStreamie).
+    return map(handler, { ...config, sink: true }) as unknown as SinkStreamie<OutputItem, Awaited<NR>>;
   }
 
   // An explicit terminal stage with nothing left to do: an identity .each. A
   // pipeline of pure transforms ends with .sink() to declare that reaching the end
   // is the point, letting the chain drain rather than retain its final outputs.
-  function sink(config: Config = {}): Streamie<OutputItem, OutputItem> {
+  function sink(config: Config = {}): SinkStreamie<OutputItem, OutputItem> {
     // The cast collapses Awaited<OutputItem> to OutputItem: outputs are already
     // settled values, but TS cannot reduce Awaited over the unresolved generic.
-    return each((item: OutputItem) => item, config) as Streamie<OutputItem, OutputItem>;
+    return each((item: OutputItem) => item, config) as SinkStreamie<OutputItem, OutputItem>;
   }
 
   // Filter is sugar over an automaticallyEmit: false stage: run the predicate, emit the
@@ -779,6 +924,39 @@ function streamieInternal<I, R>(
         if (!Array.isArray(items)) throw new Error('Cannot flatten a stream item that is not an array.');
         for (let i = 0; i < items.length; i++) tools.emit(items[i]);
         return items;
+      },
+      { ...withInheritedDefaults(config), automaticallyEmit: false },
+    ) as unknown as Streamie<OutputItem, any>;
+
+    registerOutput(nextStreamie);
+
+    return nextStreamie;
+  }
+
+  // Fused map-then-flatten: the handler maps each input to an array and the stage
+  // emits the elements individually — exactly .map(handler).flatten() without the
+  // intermediate stage (one queue, one concurrency setting, no per-item handoff
+  // between two stages). Decoupled sugar like flatten: the elements are emitted, and
+  // the handler's returned array feeds the receipt (all the outputs the item
+  // produced), so the receipt contract matches .flatten's. A handler returning a
+  // non-array is an ordinary handler error. The user handler is typed Handler (a
+  // never-emit Tools), so it cannot itself emit; only this sugar does.
+  function flatMap<NR extends readonly unknown[]>(
+    handler: Handler<OutputItem, NR>,
+    config: Config = {},
+  ): Streamie<OutputItem, any> {
+    const emitAll = (items: NR, tools: Tools<OutputItem, unknown>) => {
+      if (!Array.isArray(items)) throw new Error('flatMap handler must return an array.');
+      for (let i = 0; i < items.length; i++) tools.emit(items[i]);
+      return items;
+    };
+    const nextStreamie = streamie(
+      (item: OutputItem, tools: Tools<OutputItem, unknown>) => {
+        const result = handler(item, tools as unknown as Tools<OutputItem>);
+        if (result && (typeof (result as PromiseLike<NR>).then === 'function')) {
+          return (result as Promise<NR>).then((items) => emitAll(items, tools));
+        }
+        return emitAll(result as NR, tools);
       },
       { ...withInheritedDefaults(config), automaticallyEmit: false },
     ) as unknown as Streamie<OutputItem, any>;
@@ -917,6 +1095,91 @@ function streamieInternal<I, R>(
     return nextStreamie as unknown as Streamie<OutputItem, A>;
   }
 
+  // Passes through the first `count` items, then drains itself. The drain is a
+  // voluntary departure: this producer's onDraining wiring removes the stage as a
+  // consumer, so the producer keeps running for siblings, or parks on retained
+  // output if none remain — the same detach as breaking out of a for await. Items
+  // already queued past the cutoff still pass through the (identity) handler but are
+  // not emitted, so a burst delivery cannot overshoot. Decoupled sugar with
+  // concurrency forced to 1: "the first n" is only deterministic if items are
+  // counted in order. The receipt resolves with the item whether or not it made the
+  // cutoff.
+  function take(count: number, config: Config = {}): Streamie<OutputItem, OutputItem> {
+    if (!Number.isInteger(count) || (count < 0)) throw new Error('take count must be a non-negative integer.');
+    let taken = 0;
+    const nextStreamie = streamie(
+      (item: OutputItem, tools: Tools<OutputItem, OutputItem>) => {
+        if (taken < count) {
+          taken++;
+          tools.emit(item);
+          if (taken === count) tools.drain();
+        }
+        return item;
+      },
+      { ...withInheritedDefaults(config), automaticallyEmit: false, concurrency: 1 },
+    ) as unknown as Streamie<OutputItem, OutputItem>;
+
+    registerOutput(nextStreamie);
+
+    // take(0) has nothing to wait for; drained after registration (registerOutput
+    // refuses an already-drained consumer) so the stage detaches immediately.
+    if (count === 0) nextStreamie.drain();
+
+    return nextStreamie;
+  }
+
+  // Passes items through until the predicate matches one, then drains itself — the
+  // same voluntary detach as .take. The matching item is not emitted by default;
+  // { inclusive: true } emits it before draining. Decoupled sugar with concurrency
+  // forced to 1, since a deterministic cutoff requires evaluating items in order (an
+  // async predicate is awaited before the next item is considered). The receipt
+  // resolves with the item regardless of the verdict.
+  function until(
+    predicate: FilterHandler<OutputItem>,
+    config: Config & { inclusive?: boolean } = {},
+  ): Streamie<OutputItem, OutputItem> {
+    const inclusive = config.inclusive === true;
+    let done = false;
+    const applyVerdict = (matched: boolean, item: OutputItem, tools: Tools<OutputItem, OutputItem>) => {
+      if (!matched) return tools.emit(item);
+      done = true;
+      if (inclusive) tools.emit(item);
+      tools.drain();
+    };
+    const nextStreamie = streamie(
+      (item: OutputItem, tools: Tools<OutputItem, OutputItem>) => {
+        // Items queued behind the match still pass through the handler while the
+        // drain settles; they are simply not evaluated or emitted.
+        if (!done) {
+          const verdict = predicate(item, tools as unknown as Tools<OutputItem>);
+          if (verdict && (typeof (verdict as PromiseLike<boolean>).then === 'function')) {
+            return (verdict as Promise<boolean>).then((matched) => {
+              applyVerdict(matched, item, tools);
+              return item;
+            });
+          }
+          applyVerdict(verdict as boolean, item, tools);
+        }
+        return item;
+      },
+      { ...withInheritedDefaults(config), automaticallyEmit: false, concurrency: 1 },
+    ) as unknown as Streamie<OutputItem, OutputItem>;
+
+    registerOutput(nextStreamie);
+
+    return nextStreamie;
+  }
+
+  // Consumes this streamie to completion and resolves with every output in delivery
+  // order. Sugar over a for await loop, with the same contract: it registers a
+  // consumer (participating in backpressure, receiving retained backlog), resolves
+  // on drain, rejects on error — and on a streamie that never drains, never settles.
+  async function toArray(): Promise<OutputItem[]> {
+    const items: OutputItem[] = [];
+    for await (const item of self) items.push(item);
+    return items;
+  }
+
   function pause(shouldPause?: boolean) {
     state.isPaused = shouldPause ?? !state.isPaused;
     if (!state.isPaused) requestProcess();
@@ -1009,6 +1272,17 @@ function streamieInternal<I, R>(
     const removeOutput = () => {
       outputStreamies.delete(outputStreamie);
       while (consumerSubscriptions.length > 0) consumerSubscriptions.pop()!();
+      // The departed consumer may have been the one whose backpressure was stalling
+      // output delivery (checkCanProcessOutput stalls on ANY backpressured consumer).
+      // Its own backpressureRelease can no longer arrive — the subscription was just
+      // torn down, and a halted/detached consumer would never fire it anyway — and a
+      // surviving sibling that was never backpressured fires nothing either, so
+      // without an explicit nudge here the source would park forever with outputs
+      // queued and healthy consumers waiting. Deferred via scheduleProcess so a
+      // removal triggered from inside the source's own processing (an error
+      // propagating mid-handleOnError) can't re-enter requestProcess before a pending
+      // halt is applied.
+      scheduleProcess();
     };
     consumerSubscriptions.push(outputStreamie.onBackpressureRelease(() => requestProcess()));
     consumerSubscriptions.push(outputStreamie.onHalted((haltPayload) => {
@@ -1077,6 +1351,12 @@ function streamieInternal<I, R>(
     if (state.isHalted) throw new Error('Cannot push to a halted streamie.');
     if (state.shouldDrain) throw new Error(`Cannot push to a ${ state.isDrained ? 'drained' : 'draining'} streamie.`);
 
+    // See the note on push: an empty queue means these items begin a new partial
+    // batch, and its wait window starts now.
+    if ((settings.maxBatchWait !== Infinity) && (queue.input.length === 0) && (state.partialBatchSince === null) && (items.length > 0)) {
+      state.partialBatchSince = Date.now();
+    }
+
     for (let i = 0; i < items.length; i++) queue.input.push(items[i]);
     // Items delivered by upstream streamies have no receipts (nobody holds a handle
     // to them), but once receipt tracking is active they still occupy slots to keep
@@ -1088,16 +1368,20 @@ function streamieInternal<I, R>(
   }
 
   const self = {
-    push,
+    push: pushPublic,
     map,
     each,
     filter,
     batch,
     flatten,
+    flatMap,
     produce,
     reduce,
     scan,
+    take,
+    until,
     sink,
+    toArray,
 
     pause,
     drain,
@@ -1185,15 +1469,119 @@ function streamieInternal<I, R>(
     },
   } as unknown as Streamie<I, OutputItem, any>;
 
+  // The deferred seed push must re-check the streamie's state: in the tick between
+  // construction and this timer, the caller may have aborted it or begun a drain
+  // (directly, or via a synchronous push + drain), and push throws on both — inside
+  // a timer callback, that throw would be an uncaught exception. A seed arriving
+  // after either signal is simply moot, not an error.
   if (config.seed !== undefined) setTimeout(() => {
-    if (state.isDrained) return;
+    if (state.isHalted || state.shouldDrain) return;
     self.push(config.seed!)
   }, 0);
 
   return self;
 }
 
-export default streamie;
+// Creates a streamie fed from any iterable or async iterable — an array, a Map, a
+// generator, an async generator, anything speaking either iteration protocol — under
+// backpressure: the source is only pulled as fast as the pipeline absorbs items
+// (pulls park on waitForCapacity once the input queue reports pressure). The source
+// completing drains the streamie; the source throwing aborts it with that error; and
+// the streamie terminating first — drained, aborted, or halted (including a failure
+// propagating back up from downstream stages) — stops the pump and closes the source
+// iterator via its return(), so a generator's finally blocks run. This is the
+// ergonomic entry for "process this collection through a pipeline":
+// from(items).map(fn, { concurrency: 8 }) rather than a hand-rolled
+// create/push-each/drain dance.
+function from<T>(
+  source: Iterable<T> | AsyncIterable<T>,
+  config: Config = {},
+): Streamie<T, Awaited<T>> {
+  // Awaited<T>, not T: the core awaits thenable handler returns, so an iterable of
+  // promises yields their settled values downstream (from([Promise.resolve(1)])
+  // produces 1, not the promise) — the identity handler is not a pass-through there.
+  const target = streamie((item: T) => item, config);
+
+  const pump = async () => {
+    let isStopped = false;
+    const stop = () => { isStopped = true; };
+    const unsubscribes = [target.onDraining(stop), target.onHalted(stop)];
+    // Duck-typed rather than `in`-checked so primitive iterables (a string) work.
+    const iterator = (typeof (source as AsyncIterable<T>)[Symbol.asyncIterator] === 'function')
+      ? (source as AsyncIterable<T>)[Symbol.asyncIterator]()
+      : (source as Iterable<T>)[Symbol.iterator]();
+    try {
+      while (!isStopped) {
+        // Synchronous iterators keep their results on a synchronous fast path (no
+        // microtask per element); only genuine promises are awaited.
+        const step = iterator.next();
+        const result = (step && (typeof (step as PromiseLike<IteratorResult<T>>).then === 'function'))
+          ? await step
+          : step as IteratorResult<T>;
+        // The target may have terminated while we awaited the source; pushing now
+        // would throw. The iterator cleanup below still runs.
+        if (isStopped) break;
+        if (result.done) {
+          target.drain();
+          return;
+        }
+        // true = the push left the target backpressured.
+        if (target.push(result.value)) {
+          // Parks until a dequeue releases input backpressure — or until the target
+          // terminates, which the isStopped re-check at the top observes.
+          await waitForCapacity(target);
+        }
+      }
+      // Stopped before exhaustion: the target was drained, aborted, or halted from
+      // outside. Close the source so a generator's finally blocks run.
+      await iterator.return?.();
+    } catch (err) {
+      target.abort(err);
+      // Best-effort source cleanup; the abort above already carries the root error.
+      try { await iterator.return?.(); } catch { /* secondary to the abort */ }
+    } finally {
+      for (const unsubscribe of unsubscribes) unsubscribe();
+    }
+  };
+
+  // Deferred a microtask so consumers chained in the same synchronous block are
+  // attached before the pump acts — most importantly for a synchronously exhausted
+  // empty source, whose immediate drain would otherwise make from([]).map(...) an
+  // attach-to-drained-streamie error.
+  queueMicrotask(() => void pump());
+
+  return target;
+}
+
+// Fan-in sugar: one streamie fed by several sources — the registerInput wiring
+// (which the combinators use for one input) applied to many. The merged streamie
+// receives every source's outputs as they arrive (no ordering across sources),
+// drains once ALL sources have drained, and aborts only if every source aborted; a
+// single failing source among survivors is an ordinary drain of what arrived (see
+// handleInputTerminated). The usual consumer-side contract applies: attach the
+// merged streamie's own consumers in the same synchronous block.
+function merge<T>(
+  sources: Array<Streamie<any, T, any>>,
+  config: Config = {},
+): Streamie<T, Awaited<T>> {
+  if (!Array.isArray(sources) || (sources.length === 0)) {
+    throw new Error('merge requires a non-empty array of source streamies.');
+  }
+  // Awaited<T> for the same reason as `from`: a source whose outputs are thenables
+  // (a decoupled stage can emit promises) has them awaited by the identity handler.
+  const merged = streamie((item: T) => item, config);
+  for (const source of sources) merged.registerInput(source);
+  return merged;
+}
+
+// The helpers ride on the default export (streamie.from, streamie.merge) and are
+// also named exports, so both `import streamie from 'streamie'` and
+// `import { from } from 'streamie'` work; the CJS shim's `export =` carries the
+// properties through to require() callers.
+const streamieWithHelpers = Object.assign(streamie, { from, merge });
+
+export { from, merge };
+export default streamieWithHelpers;
 
 // The stream bridges live in opt-in entries, not here: the WHATWG bridges in
 // 'streamie/web' (which assumes a web-stream type environment) and the node:stream

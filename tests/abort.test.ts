@@ -74,7 +74,7 @@ describe('abort', () => {
 
     // Processing is deferred to a microtask, so aborting synchronously after the
     // pushes catches every item still queued.
-    const receipts = [1, 2, 3].map((item) => s.push(item));
+    const receipts = [1, 2, 3].map((item) => s.push.withReceipt(item));
     const error = new Error('external failure');
     s.abort(error);
 
@@ -262,7 +262,7 @@ describe('abort', () => {
       await delay(5);
       return input;
     }, {});
-    const receipt = s.push(1);
+    const receipt = s.push.withReceipt(1);
     s.abort(null);
 
     await expect(s.promise).rejects.toBeNull();

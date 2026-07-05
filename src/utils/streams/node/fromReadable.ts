@@ -7,10 +7,10 @@ import waitForCapacity from '../waitForCapacity.js';
 import type { Unsubscribe } from '../../events/index.js';
 
 // The Node mirror of pumpReadableStream: pumps a node:stream Readable into a streamie,
-// reading chunks and pushing them, pausing on the receipt's backpressure signal so the
+// reading chunks and pushing them, pausing whenever push reports backpressure so the
 // stream is only consumed as fast as the pipeline absorbs items. A Readable is itself
 // async-iterable, so iteration *is* the read loop — and async iteration of a Readable
-// pauses it whenever the loop is suspended, which is how the receipt's backpressure
+// pauses it whenever the loop is suspended, which is how the target's backpressure
 // reaches the source with no flowing/paused juggling here. Termination maps in both
 // directions:
 //   - stream ends               -> target.drain()
@@ -43,8 +43,20 @@ export default function fromReadable<I>(
   // end only onDraining fires (and in a halt only onHalted), leaving the *other*
   // subscription's closure (which retains this readable) attached to a long-lived
   // target forever. Unsubscribing both from finalize() closes that retention.
+  //
+  // track() rather than a bare push: a target already terminal at pump creation
+  // invokes its latched handler — and therefore stop() and finalize() — synchronously
+  // *inside* the subscription call, before that call has even returned its
+  // unsubscribe. Anything registered from then on would outlive the sweep, so once
+  // finalize has run, track unsubscribes immediately instead of retaining.
+  let isFinalized = false;
   const subscriptions: Unsubscribe[] = [];
+  function track(unsubscribe: Unsubscribe) {
+    if (isFinalized) unsubscribe();
+    else subscriptions.push(unsubscribe);
+  }
   function finalize() {
+    isFinalized = true;
     while (subscriptions.length > 0) subscriptions.pop()!();
   }
 
@@ -62,14 +74,14 @@ export default function fromReadable<I>(
   // The target terminating out from under the pump — an external abort, a downstream
   // handler error, an external drain — means it no longer accepts pushes. Both events
   // latch, so a target already terminated at pump creation stops before the first read.
-  subscriptions.push(target.onDraining(() => stop()));
-  subscriptions.push(target.onHalted(() => stop()));
+  track(target.onDraining(() => stop()));
+  track(target.onHalted(() => stop()));
 
   (async () => {
     for await (const chunk of readable) {
       if (isStopped) return;
-      const receipt = target.push(chunk as I);
-      if (receipt.backpressure) {
+      // true = the push left the target backpressured.
+      if (target.push(chunk as I)) {
         await waitForCapacity(target);
         if (isStopped) return;
       }

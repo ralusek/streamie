@@ -21,9 +21,10 @@ import type { Streamie, Config } from './types.js';
 
 // The streamie factory and the bridge implementations. Importing the factory from the
 // main entry is safe here precisely because the dependency runs one way: the main entry
-// never imports this module, so there is no cycle (which is also why fromReadable can
-// build its streamie inline rather than splitting a pump out, the way fromReadableStream
-// must to avoid one).
+// never imports this module, so there is no cycle. The pump lives in its own module
+// (utils/streams/node/fromReadable) rather than inline here so it can be exercised
+// against any existing streamie, mirroring the pumpReadableStream/fromReadableStream
+// split in the web entry.
 import streamie from './index.js';
 import pumpReadable from './utils/streams/node/fromReadable.js';
 

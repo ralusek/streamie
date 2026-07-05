@@ -7,8 +7,8 @@ import type { Unsubscribe } from '../events/index.js';
 // terminal state and stops, rather than hanging on a release that will never come.
 //
 // Shared by the stream pumps (WHATWG pumpReadableStream, Node fromReadable): both
-// push into a target streamie and must park on the receipt's backpressure flag, only
-// resuming the source as fast as the pipeline absorbs items. The caller is expected
+// push into a target streamie and park whenever push returns true (backpressured),
+// only resuming the source as fast as the pipeline absorbs items. The caller is expected
 // to re-check its own stopped flag once this resolves, since a termination resolves
 // it just as a real release does.
 export default function waitForCapacity(target: Streamie<any, any>): Promise<void> {

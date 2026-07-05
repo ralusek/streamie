@@ -43,7 +43,7 @@ describe('Streamie', () => {
         return `returned-${n}`;
       }, { automaticallyEmit: false, sink: true });
 
-      const receipt = stage.push(7);
+      const receipt = stage.push.withReceipt(7);
       stage.drain();
       await stage.promise;
 

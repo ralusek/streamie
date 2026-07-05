@@ -6,7 +6,7 @@ import waitForCapacity from '../waitForCapacity.js';
 import type { Unsubscribe } from '../../events/index.js';
 
 // Pumps a WHATWG ReadableStream into a streamie: reads chunks and pushes them,
-// pausing on the receipt's backpressure signal so the stream is only pulled as fast
+// pausing whenever push reports backpressure so the stream is only pulled as fast
 // as the pipeline absorbs items. Termination maps in both directions:
 //   - stream ends               -> target.drain()
 //   - stream errors             -> target.abort(error)
@@ -44,8 +44,20 @@ export default function pumpReadableStream<I>(
   // fires only onDraining (a halt only onHalted), leaving the other subscription's
   // closure (which retains this reader) attached to a long-lived target forever.
   // finalize() unsubscribes both, closing that retention.
+  //
+  // track() rather than a bare push: a target already terminal at pump creation
+  // invokes its latched handler — and therefore stop() and finalize() — synchronously
+  // *inside* the subscription call, before that call has even returned its
+  // unsubscribe. Anything registered from then on would outlive the sweep, so once
+  // finalize has run, track unsubscribes immediately instead of retaining.
+  let isFinalized = false;
   const subscriptions: Unsubscribe[] = [];
+  function track(unsubscribe: Unsubscribe) {
+    if (isFinalized) unsubscribe();
+    else subscriptions.push(unsubscribe);
+  }
   function finalize() {
+    isFinalized = true;
     while (subscriptions.length > 0) subscriptions.pop()!();
   }
 
@@ -67,8 +79,8 @@ export default function pumpReadableStream<I>(
   // The target terminating out from under the pump — an external abort, a downstream
   // handler error, an external drain — means it no longer accepts pushes. Both events
   // latch, so a target already terminated at pump creation stops before the first read.
-  subscriptions.push(target.onDraining(() => stop()));
-  subscriptions.push(target.onHalted(({ isAborted, abortError, lastError }) => {
+  track(target.onDraining(() => stop()));
+  track(target.onHalted(({ isAborted, abortError, lastError }) => {
     stop(isAborted ? abortError : lastError ?? undefined);
   }));
 
@@ -77,8 +89,8 @@ export default function pumpReadableStream<I>(
       const result = await reader.read();
       if (isStopped) return;
       if (result.done) break;
-      const receipt = target.push(result.value);
-      if (receipt.backpressure) {
+      // true = the push left the target backpressured.
+      if (target.push(result.value)) {
         await waitForCapacity(target);
         if (isStopped) return;
       }

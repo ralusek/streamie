@@ -2,6 +2,26 @@ import streamie from '../src';
 import createEventHandlers, { event } from '../src/utils/events';
 import { StreamieQueueError } from '../src/error';
 
+// The events util deliberately rethrows a throwing subscriber's error from a fresh
+// queueMicrotask so it surfaces as an uncaught exception without corrupting dispatch.
+// Jest's sandbox turns real uncaught exceptions into test failures, so this helper
+// observes that channel instead: it wraps queueMicrotask with a passthrough that
+// captures errors thrown by scheduled callbacks. All other callbacks (e.g. streamie's
+// own scheduleProcess) run exactly as before.
+const captureRethrownErrors = () => {
+  const original = globalThis.queueMicrotask;
+  const caught: unknown[] = [];
+  globalThis.queueMicrotask = (callback: () => void) => {
+    original(() => {
+      try { callback(); } catch (err) { caught.push(err); }
+    });
+  };
+  return {
+    caught,
+    restore: () => { globalThis.queueMicrotask = original; },
+  };
+};
+
 describe('Event handlers utility', () => {
   test('on delivers every emitted payload until unsubscribed', () => {
     const events = createEventHandlers({ progress: event<number>() });
@@ -38,6 +58,48 @@ describe('Event handlers utility', () => {
     events.tick.emit();
 
     expect(count).toBe(0);
+  });
+
+  test('the same function subscribed twice fires twice per emit (EventEmitter semantics)', () => {
+    const events = createEventHandlers({ tick: event() });
+
+    let count = 0;
+    const handler = () => count++;
+    events.tick.on(handler);
+    events.tick.on(handler);
+
+    events.tick.emit();
+    expect(count).toBe(2);
+  });
+
+  test('the same function subscribed twice has independent unsubscribes', () => {
+    const events = createEventHandlers({ tick: event() });
+
+    let count = 0;
+    const handler = () => count++;
+    const unsubscribeFirst = events.tick.on(handler);
+    events.tick.on(handler);
+
+    // Removing one registration must not tear down the other (with the raw function
+    // in the handler Set, the two unsubscribes would alias).
+    unsubscribeFirst();
+    events.tick.emit();
+    expect(count).toBe(1);
+  });
+
+  test('the same function subscribed via on and once fires through both', () => {
+    const events = createEventHandlers({ tick: event() });
+
+    let count = 0;
+    const handler = () => count++;
+    events.tick.on(handler);
+    events.tick.on.once(handler);
+
+    events.tick.emit();
+    expect(count).toBe(2);
+    // The once registration is spent; the persistent one remains.
+    events.tick.emit();
+    expect(count).toBe(3);
   });
 
   test('handlers are independent: removing one leaves the others', () => {
@@ -98,6 +160,96 @@ describe('Event handlers utility', () => {
     events.settled.on.once((value) => seen.push(`late-once:${value}`));
 
     expect(seen).toEqual(['first', 'late:first', 'late-once:first']);
+  });
+
+  test('a plain handler subscribed during a firing waits for the next emit', () => {
+    const events = createEventHandlers({ tick: event() });
+
+    let lateFirings = 0;
+    let armed = false;
+    events.tick.on(() => {
+      if (!armed) {
+        armed = true;
+        events.tick.on(() => { lateFirings++; });
+      }
+    });
+
+    // Subscribed mid-firing: not invoked by the emit in flight...
+    events.tick.emit();
+    expect(lateFirings).toBe(0);
+    // ...but by the next one.
+    events.tick.emit();
+    expect(lateFirings).toBe(1);
+  });
+
+  test('a re-entrant emit dispatches depth-first: the nested firing completes before the outer resumes', () => {
+    const events = createEventHandlers({ value: event<number>() });
+
+    const seen: string[] = [];
+    let reentered = false;
+    events.value.on((value) => {
+      seen.push(`a:${value}`);
+      if (!reentered) {
+        reentered = true;
+        events.value.emit(2);
+      }
+    });
+    events.value.on((value) => { seen.push(`b:${value}`); });
+
+    events.value.emit(1);
+    // a(1) re-enters: the inner emit(2) runs both handlers to completion, then the
+    // outer firing resumes with b(1).
+    expect(seen).toEqual(['a:1', 'a:2', 'b:2', 'b:1']);
+  });
+
+  test('a throwing handler does not prevent later handlers from firing, and its error still surfaces', async () => {
+    const capture = captureRethrownErrors();
+    try {
+      const events = createEventHandlers({ tick: event<number>() });
+
+      const seen: number[] = [];
+      events.tick.on(() => { throw new Error('subscriber boom'); });
+      events.tick.on((value) => seen.push(value));
+
+      events.tick.emit(1);
+      // The handler behind the thrower still received the firing, synchronously.
+      expect(seen).toEqual([1]);
+
+      // The error was not swallowed: it is rethrown asynchronously as an uncaught
+      // exception once the microtask queue turns.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(capture.caught).toHaveLength(1);
+      expect((capture.caught[0] as Error).message).toBe('subscriber boom');
+    } finally {
+      capture.restore();
+    }
+  });
+
+  test('a throwing handler does not break a latching event: it latches, later and late subscribers still fire', async () => {
+    const capture = captureRethrownErrors();
+    try {
+      const events = createEventHandlers({ settled: event<string>({ latching: true }) });
+
+      const seen: string[] = [];
+      events.settled.on(() => { throw new Error('latching boom'); });
+      events.settled.on((value) => seen.push(value));
+
+      events.settled.emit('first');
+      // The handler after the thrower still received the transition.
+      expect(seen).toEqual(['first']);
+      // The latch stuck: late subscribers are invoked immediately with the payload...
+      events.settled.on((value) => seen.push(`late:${value}`));
+      expect(seen).toEqual(['first', 'late:first']);
+      // ...and subsequent emits are still ignored.
+      events.settled.emit('second');
+      expect(seen).toEqual(['first', 'late:first']);
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(capture.caught).toHaveLength(1);
+      expect((capture.caught[0] as Error).message).toBe('latching boom');
+    } finally {
+      capture.restore();
+    }
   });
 });
 
@@ -182,7 +334,7 @@ describe('Streamie events', () => {
     s.each((item) => { handled.push(item); });
 
     for (let item = 1; item <= 6; item++) {
-      if (s.push(item).backpressure) {
+      if (s.push(item)) {
         await new Promise<void>((resolve) => s.onBackpressureRelease.once(() => {
           onceFirings++;
           resolve();
@@ -197,6 +349,34 @@ describe('Streamie events', () => {
     // producer was waiting went unobserved rather than accumulating handlers.
     expect(onceFirings).toBeGreaterThan(0);
     expect(onceFirings).toBeLessThanOrEqual(6);
+  });
+
+  test('a throwing onDrained handler does not sever the drain cascade to downstream stages', async () => {
+    const capture = captureRethrownErrors();
+    try {
+      const s = streamie((input: number) => input, {});
+      // Subscribed before piping, so this handler dispatches ahead of the internal
+      // input-terminated wiring that .each registers below — exactly the ordering
+      // that used to abort dispatch and leave the tail draining forever.
+      s.onDrained(() => { throw new Error('user handler boom'); });
+
+      const handled: number[] = [];
+      const tail = s.each((item) => { handled.push(item); });
+
+      s.push(1);
+      s.drain();
+
+      await tail.promise;
+      expect(handled).toEqual([1]);
+      expect(tail.state.isDrained).toBe(true);
+
+      // The subscriber's error still surfaced rather than being swallowed.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(capture.caught).toHaveLength(1);
+      expect((capture.caught[0] as Error).message).toBe('user handler boom');
+    } finally {
+      capture.restore();
+    }
   });
 
   test('event subscriptions return unsubscribe functions across the board', () => {

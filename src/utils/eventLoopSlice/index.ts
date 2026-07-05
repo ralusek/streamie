@@ -20,13 +20,19 @@ let isSliceTracked = false;
 
 // `now` lets a hot loop that has already read the clock this iteration avoid a
 // second read — Date.now() per item is measurable at millions of items per second.
-// A slightly stale timestamp only understates the age (a yield happens one
-// iteration later than it ideally would), never overstates it.
+// A stale timestamp is safe in both roles: measured against a fresh slice start it
+// only understates the age (a yield happens one iteration later than it ideally
+// would), and it is never allowed to *seed* a slice — the first call of a slice
+// reads the clock itself (once per macrotask turn, so effectively free), because a
+// stale seed would overstate every subsequent age in the slice and force a spurious
+// yield.
 export default function currentSliceAge(now: number = Date.now()): number {
   if (!isSliceTracked) {
     isSliceTracked = true;
-    sliceStartAt = now;
+    sliceStartAt = Date.now();
     yieldToMacrotask(() => { isSliceTracked = false; });
   }
-  return now - sliceStartAt;
+  // A caller's stale `now` can predate the fresh slice start; that means "the slice
+  // just began", not a negative age.
+  return now < sliceStartAt ? 0 : now - sliceStartAt;
 }
