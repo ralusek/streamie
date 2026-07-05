@@ -1,14 +1,16 @@
 {
+  // The default config: the ESM build, and what editors/`tsc --noEmit` pick up. Source
+  // is authored in NodeNext style (explicit `.js` extensions on every relative import),
+  // so this is also the config that validates those specifiers.
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "target": "es5",
-    "module": "commonjs",
-    "declaration": true,
-    "outDir": "./dist",
-    "strict": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": "./dist/esm",
+    "rootDir": "./src"
   },
   "include": ["src"],
-  "exclude": ["node_modules", "**/*.test.ts"]
+  // src/index.cts is the CommonJS-only entry shim; it belongs to the CJS build
+  // (tsconfig.cjs.json) and must not emit a stray .cjs into the ESM output here.
+  "exclude": ["node_modules", "**/*.test.ts", "**/*.cts"]
 }

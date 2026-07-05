@@ -11,10 +11,10 @@ describe('Multiple Inputs and Outputs', () => {
     streamB.registerInput(streamA2);
 
     const result: number[] = [];
-    const finalStreamie = streamB.map((output) => result.push(output), {});
+    const finalStreamie = streamB.each((output) => result.push(output), {});
     
-    streamA1.push(1, 2);
-    streamA2.push(3, 4);
+    [1, 2].forEach((item) => streamA1.push(item));
+    [3, 4].forEach((item) => streamA2.push(item));
     expect(streamA1.state.isDrained).toBe(false);
     expect(streamA2.state.isDrained).toBe(false);
     expect(streamB.state.isDrained).toBe(false);
@@ -40,16 +40,16 @@ describe('Multiple Inputs and Outputs', () => {
   test('Handles multiple outputs correctly', async () => {
     const streamB = streamie(async (input: number) => input * 2, {});
     const streamC1 = streamie(async (input: number) => input * 2, {});
-    const streamC2 = streamie<number, number, {}>(async (input: number) => delay(200).then(() => input * 3), {});
+    const streamC2 = streamie(async (input: number) => delay(200).then(() => input * 3), {});
     streamB.registerOutput(streamC1);
     streamB.registerOutput(streamC2);
 
     let result1: number[] = [];
     let result2: number[] = [];
-    const finalStreamie1 = streamC1.map((output) => result1.push(output), {});
-    const finalStreamie2 = streamC2.map((output) => result2.push(output), {});
+    const finalStreamie1 = streamC1.each((output) => result1.push(output), {});
+    const finalStreamie2 = streamC2.each((output) => result2.push(output), {});
 
-    streamB.push(1, 2, 3, 4);
+    [1, 2, 3, 4].forEach((item) => streamB.push(item));
     expect(streamB.state.isDrained).toBe(false);
     expect(streamC1.state.isDrained).toBe(false);
     expect(streamC2.state.isDrained).toBe(false);

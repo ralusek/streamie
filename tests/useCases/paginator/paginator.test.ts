@@ -60,7 +60,8 @@ describe('Streamie', () => {
         }
         // Push articles to output
         return response.data;
-      }, { seed: 1, flatten: true })
+      }, { seed: 1 })
+      .flatten()
       .map(async (article) => {
         runningTracker.mapA.push(++currentlyRunning.mapA);
         initialMapResults.push(article);
@@ -68,7 +69,8 @@ describe('Streamie', () => {
         currentlyRunning.mapA--;
         return result;
       }, { concurrency: 3 })
-      .map(async (articles) => {
+      .batch(5)
+      .each(async (articles) => {
         runningTracker.mapB.push(++currentlyRunning.mapB);
         batchMapResults.push(articles);
         const lastPageArticles = TOTAL_ARTICLES % 5;
@@ -77,7 +79,7 @@ describe('Streamie', () => {
         const result = await saveBatch(articles);
         currentlyRunning.mapB--;
         return result;
-      }, { batchSize: 5 });
+      }, {});
 
       await paginator.promise;
 

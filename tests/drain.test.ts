@@ -21,12 +21,12 @@ describe('Handles drains as expected', () => {
       return input * 3;
     }, {})
     
-    const map = streamC.map((output) => results.C.push(output), {});
+    const map = streamC.each((output) => results.C.push(output), {});
 
     streamA.registerOutput(streamB);
     streamB.registerOutput(streamC);
 
-    streamA.push(1, 2, 3, 4);
+    [1, 2, 3, 4].forEach((item) => streamA.push(item));
 
     streamA.drain();
     await streamA.promise;

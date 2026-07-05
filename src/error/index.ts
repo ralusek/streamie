@@ -1,19 +1,19 @@
-import { BatchedIfConfigured, Config } from '../types';
-
-type Associated<IQT, C extends Config> = {
-  input: BatchedIfConfigured<IQT, C>;
+type Associated<IQT> = {
+  // The input whose handling produced the error. This is a single item for unbatched
+  // streamies, or the batch being handled for batched streamies.
+  input: IQT | IQT[];
   index: number;
   timestamp: number;
 };
 
-export class StreamieQueueError<IQT, C extends Config> extends Error {
+export class StreamieQueueError<IQT> extends Error {
   public originalError: unknown;
-  public associated: Associated<IQT, C>;
+  public associated: Associated<IQT>;
 
   constructor(
     message: string,
     originalError: unknown,
-    associated: Associated<IQT, C>,
+    associated: Associated<IQT>,
   ) {
     super(message);
     this.name = 'StreamieQueueError';

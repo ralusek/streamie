@@ -17,8 +17,11 @@ describe('Streamie', () => {
     test('Input and Output backpressure is correctly applied', async () => {
       // Stream A just passes them right through
       const streamA = streamie(async (input: ExternallyResolvablePromise) => input, { backpressureAt: 2});
-      // Stream B awaits the items until they're resolved.
-      const streamB = streamie(async (input: ExternallyResolvablePromise) => input.promise, { backpressureAt: 2 });
+      // Stream B awaits the items until they're resolved. It is the pipeline's
+      // terminal stage, so it is a sink: without that, its outputs would be retained
+      // (a consumer-less streamie no longer discards them) and its own output
+      // backpressure would distort the input-side dynamics this test measures.
+      const streamB = streamie(async (input: ExternallyResolvablePromise) => input.promise, { backpressureAt: 2, sink: true });
       streamA.registerOutput(streamB);
 
 
@@ -31,7 +34,7 @@ describe('Streamie', () => {
       expect(streamB.state.backpressure.input || streamB.state.backpressure.output).toBe(false);
       expect(streamB.state.count.handling).toBe(0);
       const firstBatch = items.slice(0, 3); // 3 items
-      streamA.push(...firstBatch); // 3 items
+      firstBatch.forEach((item) => streamA.push(item)); // 3 items
 
       await delay(10);
       expect(streamA.state.count.queued.input).toBe(0);
@@ -44,7 +47,7 @@ describe('Streamie', () => {
       expect(streamB.state.backpressure.output).toBe(false);
 
       const secondBatch = items.slice(3, 6); // 3 items
-      streamA.push(...secondBatch); // 3 items
+      secondBatch.forEach((item) => streamA.push(item)); // 3 items
 
       await delay(10);
       expect(streamA.state.count.queued.input).toBe(1);

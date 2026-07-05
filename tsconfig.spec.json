@@ -1,0 +1,13 @@
+{
+  // Used by ts-jest (see jest.config.cjs) to transpile sources and specs for the Jest
+  // CommonJS runtime. Mirrors the CJS build's module settings but is its own file so the
+  // build config can keep its rootDir/outDir/include without those constraining the test
+  // files that live outside src/. With isolatedModules (from the base), ts-jest does a
+  // fast, type-check-free transpile.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "bundler",
+    "types": ["jest", "node"]
+  }
+}

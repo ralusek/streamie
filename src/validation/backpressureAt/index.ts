@@ -1,4 +1,4 @@
-import { Config } from '../../types';
+import type { Config } from '../../types.js';
 
 export default (config: Config) => {
   const backpressureAt = {

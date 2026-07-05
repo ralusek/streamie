@@ -1,141 +1,392 @@
-import { StreamieQueueError } from './error';
+import type { StreamieQueueError } from './error/index.js';
+import type { Subscribe, Unsubscribe } from './utils/events/index.js';
 
-export type BatchedIfConfigured<T, C extends Config> =
-  C extends { batchSize: infer BS }
-    ? (BS extends 1 | undefined
-        ? T
-        : T[])
-    : T;
+export type { Subscribe, Unsubscribe };
 
-export type UnflattenedIfConfigured<T, C extends Config> =
-  C extends { flatten: infer F }
-    ? (F extends true
-        ? T[]
-        : T)
-    : T;
-
-export type OutputIsInputIfFilter<IQT, OQT, C extends Config> =
-  C extends { isFilter: infer F }
-    ? (F extends true
-        ? IQT
-        : OQT)
-    : OQT;
-
-export type BooleanIfFilter<OQT, C extends Config> =
-  C extends { isFilter: infer F }
-    ? (F extends true
-        ? boolean
-        : OQT)
-    : OQT;
-
-export type IfFilteredElse<A, B, C extends Config> =
-  C extends { isFilter: infer F }
-    ? (F extends true
-        ? A
-        : B)
-    : B;
-
-// Not the Tools<IQT, OQT, C> where tools just included references to the streamie itself are prefereable,
-// but caused inference to stop working. 
-// Whenever the tools argument was included at all in the arguments, inference basically stopped working.
-// export type Handler<IQT, OQT, C extends Config> = (input: BatchedIfConfigured<IQT, C>, tools: Tools<IQT, OQT, C>) => BooleanIfFilter<UnflattenedIfConfigured<OQT, C>, C> | Promise<BooleanIfFilter<UnflattenedIfConfigured<OQT, C>, C>>;
-// type Tools<IQT, OQT, C extends Config> = {
-//   self: Streamie<IQT, OQT, C>;
-//   push: Streamie<IQT, OQT, C>['push'];
-//   index: number;
-// };
-
-export type Handler<IQT, OQT, C extends Config> = (input: BatchedIfConfigured<IQT, C>, tools: Tools<IQT>) => BooleanIfFilter<UnflattenedIfConfigured<OQT, C>, C> | Promise<BooleanIfFilter<UnflattenedIfConfigured<OQT, C>, C>>;
-type Tools<IQT> = {
-  push: (item: IQT) => void;
-  drain: () => void;
-  index: number;
-};
+export type MaybePromise<T> = T | Promise<T>;
 
 export type Config = {
-  // The number of items that can be queued before backpressure is applied. Backpressure will
-  // alert upstream streamies that they should stop pushing items into the queue until the
-  // downstream streamie has processed some items.
-  // If passing a number, it will be applied to both input and output queues, for a total of
-  // 2 * backpressureAt items allowed in the queue.
-  // Input backpressure is how many items can be pushed into the input queue before backpressure
-  // is applied.
-  // Output backpressure is how many items can be pushed into the output queue before backpressure
-  // is applied.
-  // Output backpressure will be used to determine if this streamie should pause handling items,
-  // whereas input backpressure will be used to determine if upstream streamies should pause.
   backpressureAt?: number | {
     input?: number;
     output?: number;
   };
-  // The number of items which can be processed concurrently.
   concurrency?: number;
-  // The number of items that should wait to be processed in a single handler call. Fewer items will
-  // be passed into the handler in the event that the streamie has been told to clear, or in the event
-  // that the maxBatchWait time has elapsed.
-  batchSize?: number;
-  // The maximum amount of time that should be waited before processing a batch of items. Should the
-  // amount of time since the last handler call exceed this value, the handler will be called with
-  // fewer than batchSize items.
-  maxBatchWait?: number;
-  // Means that truthiness of output determines whether or not the respective input goes into the output queue.
-  isFilter?: boolean;
-  // Whether streamie should stop and throw an error on the promise upon encountering an error in a handler.
   haltOnError?: boolean;
-  // Should flatten the output.
-  flatten?: boolean;
-  // Whether errors should be passed downstream.
   propagateErrors?: boolean;
+  // Declares this streamie a terminal stage: its handler is the endpoint, so outputs
+  // are discarded as they settle (skipping the output queue entirely) instead of
+  // being held for consumers, and registering a consumer throws. backpressureAt.output
+  // has no effect on a sink — there is no output queue. Without this, a streamie with
+  // no consumers retains its outputs — bounded by backpressureAt.output — and stalls,
+  // propagating backpressure upstream: producing into the void must be asked for,
+  // never ambient. The .each and .sink combinators are the usual ways to get a sink;
+  // this flag is their lower-level form.
+  sink?: boolean;
+  // By default, a consumer halt that leaves a streamie with no consumers at all
+  // halts (aborts) it too: every path its outputs could take ended in failure, so
+  // there is nothing left to produce for, and the failure propagates upstream stage
+  // by stage — rejecting every stage's promise with the root error and releasing
+  // any bridged source. Voluntary detaches (a drain, an async iterator break) never
+  // trigger this, and a surviving sibling consumer prevents it. keepAlive opts this
+  // streamie out, for a deliberately long-lived source (a hub) whose ephemeral
+  // consumers come, fail, and are replaced: it instead retains its outputs and
+  // parks on backpressure, exactly as if the consumers had detached voluntarily.
+  keepAlive?: boolean;
+  // Escape hatch for purely synchronous pipelines (handlers that settle without
+  // real I/O or timers, fed by a source that never runs dry), which could otherwise
+  // monopolize the event loop: processing yields via a macrotask after running
+  // continuously this long (milliseconds; default 100). Pipelines doing real
+  // asynchronous work yield naturally and never hit this.
+  yieldAfter?: number;
+  // Re-attempts a failed handler invocation before it counts as an error. A bare
+  // number is that many retries with no delay (total tries = retries + 1); the object
+  // form adds a delay in milliseconds before each retry — a constant, or a function
+  // of the 1-based retry attempt (e.g. attempt => 2 ** attempt * 100 for exponential
+  // backoff). Retries re-invoke the handler with the same input and tools; only when
+  // the final attempt fails does the error reach onError/haltOnError/the receipt.
+  // When a timeout is also configured, each attempt gets its own timeout window and a
+  // timed-out attempt is retried like any other failure. Not inherited by chained
+  // stages.
+  retry?: number | {
+    attempts: number;
+    delay?: number | ((attempt: number) => number);
+  };
+  // Milliseconds an invocation may run before it is treated as failed. The rejection
+  // is a regular handler error (wrapped in StreamieQueueError, subject to retry,
+  // haltOnError, and propagation). The handler itself cannot be cancelled — its work
+  // continues in the background, but a late settlement is ignored, and anything a
+  // decoupled handler emits after timing out is delivered or dropped by the usual
+  // emit rules. Not inherited by chained stages.
+  timeout?: number;
+  // NOTE: automaticallyEmit is deliberately NOT here. Decoupling output from the return
+  // value is a discriminant that must be a literal — the decoupled .map/streamie overloads
+  // (and .produce) select on a literal `automaticallyEmit: false`, while the runtime treats
+  // anything `!== false` as auto-emit. If it lived on the widenable Config, a Config-typed
+  // value carrying `automaticallyEmit: false` would widen the property to `boolean`, miss
+  // the literal-false overload, bind to the auto-emit overload (so the stage would be typed
+  // as producing its return value) yet run decoupled (dropping that return) — a silent
+  // type/runtime mismatch. Keeping it off Config means it can only arrive as an inline
+  // literal, which the overloads read correctly; the field lives on InternalConfig below.
 };
 
-export type Streamie<IQT extends any, OQT extends any, C extends Config> = {
-  push: (item: IQT) => void;
+export type BatchConfig = Config & {
+  // The maximum amount of time to wait for a full batch to accumulate before handling
+  // a partial one.
+  maxBatchWait?: number;
+};
 
-  // Forks for new streamies
-  map: <
-    NOQT extends IfFilteredElse<
-      BatchedIfConfigured<OQT, NC>,
-      any,
-      NC
-    >,
-    NC extends Config,
-  >(
-    handler: Handler<
-      OQT,
-      NOQT,
-      NC
-    >,
-    config: NC,
-  ) => Streamie<OQT, NOQT, NC>;
-  filter: <NC extends Omit<Config, 'isFilter'>>(
-    handler: Handler<OQT, boolean, NC>,
-    config: NC,
-  ) => Streamie<OQT, BatchedIfConfigured<OQT, NC>, NC>;
+// Batching is implemented by the core process loop (filtering and flattening are now
+// ordinary automaticallyEmit: false stages built on tools.emit), exposed publicly only
+// through the batch combinator, which configures it via this internal type. Keeping
+// these off the public Config is what allows Streamie's types to stay free of
+// conditional types.
+/** @internal */
+export type InternalConfig = Config & {
+  batchSize?: number;
+  maxBatchWait?: number;
+  // When false, output is decoupled from the return value: the handler produces output via
+  // tools.emit and its return value feeds only the push receipt. Default true (one output
+  // per invocation, the return value). The decoupled .map/streamie overloads accept this as
+  // an inline literal and the filter/flatten/produce/reduce combinators set it internally;
+  // it is kept off the public Config so it can never be widened (see the note there).
+  automaticallyEmit?: boolean;
+};
 
-  // Control flow
+export type Tools<I, O = never> = {
+  // The streamie's own public push — the natural tool for the self-feeding paginator
+  // pattern, and receipt-free by default (a handler never sees its own receipts).
+  // Typing withReceipt's promise here would be circular — it resolves with the very
+  // output type the handler receiving these tools is in the middle of defining — so
+  // tools expose only the receipt's synchronous metadata. (At runtime it is the full
+  // receipt, for the untyped/casting caller.)
+  push: {
+    (item: I): boolean;
+    withReceipt: (item: I) => { backpressure: boolean };
+  };
+  drain: () => void;
+  // Appends an output to this stage, delivered to consumers exactly like an
+  // automatically-emitted return value. The general form of producing output: a
+  // normal stage emits its return value once for you, a filter emits conditionally,
+  // a flatten emits once per element. A stable reference across invocations, safe to
+  // call any number of times (including zero) — including from a callback scheduled
+  // after the handler returns, though an emit fired once the stage has drained or halted
+  // is dropped (it has nowhere left to deliver). Without automaticallyEmit: false the
+  // stage also auto-emits the return value, so most handlers ignore this entirely.
+  //
+  // O defaults to never — the type an auto-emit handler sees. There, output IS the
+  // return value, so emit must not be usable: it would be a second, untracked source of
+  // output (a string emitted from a handler whose return is a number, with the stage
+  // still typed Streamie<_, number>), and TypeScript cannot fold those emits into the
+  // output type since it never infers a generic from a function body. never makes such a
+  // call a type error while leaving return inference untouched (unlike tying emit to the
+  // return type, which would put a still-being-inferred type in a parameter position and
+  // break that inference). The decoupled combinator forms (automaticallyEmit: false) set
+  // O instead — from an explicit type argument or an annotation on this very parameter —
+  // and that typed emit is then what drives the stage's output type.
+  emit: (output: O) => void;
+  index: number;
+};
+
+// The payload of the halted event, distinguishing how the halt came about. A halt is
+// either externally imposed via abort() — own or cascaded from upstream — or the
+// result of a handler error under haltOnError. The fields are deliberately all
+// present rather than collapsed into a single error: a streamie can carry a handler
+// error (haltOnError: false) and later be aborted, and subscribers like stream
+// bridges may care about both.
+export type StreamieHaltPayload<I> = {
+  // True when the halt came from abort() rather than a handler error.
+  isAborted: boolean;
+  // Whatever abort() was called with — an arbitrary external value, not necessarily
+  // a StreamieQueueError. Undefined for a bare abort() and for non-abort halts.
+  abortError: unknown;
+  // The last error thrown by this streamie's own handler invocations, if any.
+  lastError: StreamieQueueError<I> | null;
+};
+
+// The push entry point: one conceptual operation, two forms — mirroring the events
+// API's on/on.once shape. The callable is the canonical, receipt-free push: nothing
+// is allocated, the item's individual outcome is not observable, and the return is
+// whether the push left the streamie at or beyond its input backpressure threshold.
+// true = backpressured, consistent with receipt.backpressure, state.backpressure,
+// and onBackpressureRelease across the library — note this is the INVERSE of Node's
+// writable.write() convention (whose true means "keep writing").
+//
+// push.withReceipt is the tracked variant: it returns a PushReceipt whose lazy
+// promise resolves with that item's handler-return value. The first withReceipt call
+// permanently activates per-item receipt bookkeeping on the streamie, so producers
+// that only pace on backpressure should stay on the plain form.
+export type Push<I, R> = {
+  (item: I): boolean;
+  withReceipt: (item: I) => PushReceipt<R>;
+};
+
+// The synchronous result of a tracked push (push.withReceipt).
+export type PushReceipt<O> = {
+  // Whether this push left the streamie at or beyond its input backpressure
+  // threshold. Pushes are never refused, so ignoring this only grows the input
+  // queue; a cooperative producer seeing true should pause and resume on the
+  // onBackpressureRelease event.
+  readonly backpressure: boolean;
+
+  // Resolves once the item's handler invocation has settled, with the handler's settled
+  // RETURN value (the type parameter here is R, the stage's receipt type) — the promise
+  // signals "finished processing", and the value is whatever the handler returned, which
+  // is NOT in general what the stage emitted downstream. For a plain map the two coincide
+  // (the return is the one output). For the decoupled forms they diverge: a filter resolves
+  // with the item whether or not it passed, a flatten with the whole pre-flatten array
+  // (every element it emitted), reduce/scan with the accumulator after this item, and a
+  // produce / decoupled map with whatever the handler chose to return, independent of what
+  // it emitted. Rejects with the StreamieQueueError if the invocation threw, or, if the
+  // streamie halts before the item is ever handled, with the halting error.
+  //
+  // Created lazily on first access: an unobserved receipt allocates no promise and
+  // can never produce an unhandled rejection when the pipeline errors.
+  readonly promise: Promise<O>;
+};
+
+export type Handler<I, R> = (
+  input: I,
+  tools: Tools<I>,
+) => MaybePromise<R>;
+
+export type FilterHandler<I> = (
+  input: I,
+  tools: Tools<I>,
+) => MaybePromise<boolean>;
+
+// I = input item type; O = stream output type (what consumers and iterators see); R =
+// the handler's settled return value. O and R coincide for an auto-emit stage (the
+// return value IS the single output), and diverge only for the decoupled forms
+// (automaticallyEmit: false, where emit produces O and the return is a separate R) and
+// for flatten (output is each element, return is the whole pre-flatten array). R is
+// what a push receipt resolves with. It defaults to O so the two-argument form
+// Streamie<I, O> stays correct and unchanged for every auto-emit stage; only code that
+// pushes to and awaits a decoupled/flatten stage needs the third argument. (A "don't
+// care about R" position — the register methods, the bridges — must write the third
+// argument as `any`, since with the default it would otherwise pin R to a concrete O.)
+export type Streamie<I, O, R = O> = {
+  // Synchronous; both forms throw on a draining, drained, or halted streamie. The
+  // callable is the receipt-free push returning the backpressure boolean (true =
+  // backpressured); push.withReceipt returns a PushReceipt with a lazy promise for
+  // the item's handler-return value R — see Push and PushReceipt.
+  push: Push<I, R>;
+
+  map: {
+    // Decoupled output (automaticallyEmit: false): the stage's output type NO is the
+    // caller's to supply — an explicit type argument (`.map<NO>(handler, …)`) or an
+    // annotation on the emit parameter — and it types tools.emit. The handler's return
+    // value is a separate type NR, inferred from the return and surfaced as the stage's
+    // receipt type; it does not reach the stream. NO defaults to unknown when the caller
+    // supplies neither, because TypeScript cannot infer it from the emit() calls in the
+    // body. Listed first so it is chosen when the config selects it.
+    // NR defaults to unknown so the explicit-output form `.map<NO>(…)` resolves here:
+    // TypeScript's explicit type arguments are all-or-nothing for non-defaulted
+    // parameters, so without the default, providing only NO would fail to match this
+    // overload and fall through to the default one. The trade-off is that `.map<NO>()`
+    // gets a precise output but an unknown receipt type (NR can't be inferred once NO is
+    // given explicitly); annotating the emit parameter instead keeps BOTH precise.
+    <NO, NR = unknown>(
+      handler: (input: O, tools: Tools<O, NO>) => MaybePromise<NR>,
+      config: Config & { automaticallyEmit: false },
+    ): Streamie<O, NO, Awaited<NR>>;
+    // Default: one output per invocation, the handler's settled return value — which is
+    // therefore both the output and the receipt type (R defaults to O). The decoupled
+    // overload above is selected only by a literal automaticallyEmit: false. This one
+    // rejects automaticallyEmit outright (?: never): a config value that structurally
+    // carries automaticallyEmit: false must not bind here (auto-emit typing) while running
+    // decoupled — with never it matches neither overload, surfacing as a compile error
+    // rather than a silent type/runtime mismatch. Decouple via the overload above or via
+    // .produce.
+    <NR>(
+      handler: Handler<O, NR>,
+      config?: Config & { automaticallyEmit?: never },
+    ): Streamie<O, Awaited<NR>>;
+  };
+
+  // A .map that is also a terminal stage (sink: true): the handler is the endpoint —
+  // a forEach. Outputs are discarded as they settle and consumers cannot be
+  // registered — which the SinkStreamie return type enforces at compile time by
+  // omitting every consumer-attaching member; await .promise on the returned
+  // streamie for completion.
+  each: <R>(handler: Handler<O, R>, config?: Config) => SinkStreamie<O, Awaited<R>>;
+
+  filter: (handler: FilterHandler<O>, config?: Config) => Streamie<O, O>;
+
+  batch: (batchSize: number, config?: BatchConfig) => Streamie<O, O[]>;
+
+  // Reports whether this streamie is a batching stage (created via .batch). With no
+  // argument: true when a batch size was configured, including .batch(1) — a batching
+  // stage that emits single-element arrays, observably distinct from an unbatched
+  // streamie. With a size: whether the configured batch size is exactly that value. An
+  // unbatched streamie reports false for every query.
+  isBatched: (batchSize?: number) => boolean;
+
+  // Only callable when the stream's items are themselves arrays; emits their elements
+  // individually. Output is the element type E, but the receipt type is the whole
+  // pre-flatten array O — all the outputs the item produced — so R is O, not E.
+  flatten: [O] extends [readonly (infer E)[]]
+    ? (config?: Config) => Streamie<O, E, O>
+    : never;
+
+  // Fused map-then-flatten: the handler returns an array per input and the stage
+  // emits its elements individually. Exactly `.map(handler).flatten()` in one stage —
+  // one queue and one concurrency setting instead of two. The output type is the
+  // element type of the handler's returned array; the receipt resolves with the whole
+  // array (all the outputs the item produced), mirroring .flatten.
+  flatMap: <NR extends readonly unknown[]>(
+    handler: Handler<O, NR>,
+    config?: Config,
+  ) => Streamie<O, Awaited<NR>[number], Awaited<NR>>;
+
+  // Passes through the first `count` items, then drains itself — detaching from its
+  // producer as a voluntary departure (the producer keeps running for siblings, or
+  // parks on retained output if none remain). Items already queued past the cutoff
+  // are discarded. The fold is sequential (concurrency 1) so "first n" is
+  // deterministic. take(0) drains immediately. The receipt resolves with the item
+  // whether or not it was within the cutoff.
+  take: (count: number, config?: Config) => Streamie<O, O>;
+
+  // Passes items through until the predicate returns true, then drains itself (the
+  // same voluntary detach as .take). The matching item is NOT emitted by default;
+  // pass { inclusive: true } to emit it before draining. An async predicate is
+  // awaited, and evaluation is sequential (concurrency 1) so the cutoff is
+  // deterministic. The receipt resolves with the item regardless of the verdict.
+  until: (
+    predicate: FilterHandler<O>,
+    config?: Config & { inclusive?: boolean },
+  ) => Streamie<O, O>;
+
+  // Consumes this streamie to completion and resolves with every output, in order.
+  // Sugar over a `for await` loop: it registers a consumer (so it participates in
+  // backpressure and receives retained backlog like any other), resolves when the
+  // streamie drains, and rejects if it errors. On a streamie that never drains it
+  // never settles — pair it with .take/.until or a draining source.
+  toArray: () => Promise<O[]>;
+
+  // The general output-producing stage (automaticallyEmit: false): the handler is handed
+  // tools.emit and produces zero or more outputs per input, whenever it likes, while its
+  // return value feeds only the push receipt. map, filter, and flatten are specializations
+  // of this. The output type NO is the caller's to supply — an explicit type argument
+  // (`.produce<NO>(…)`) or an annotation on the emit parameter — since TypeScript cannot
+  // infer it from the emit() calls in the body; left unsupplied it is unknown. NR (the
+  // receipt type) is inferred from the return value, but, as with the decoupled .map
+  // overload, providing NO explicitly forces NR to its default — annotate the emit
+  // parameter instead to keep both precise.
+  produce: <NO, NR = unknown>(
+    handler: (input: O, tools: Tools<O, NO>) => MaybePromise<NR>,
+    config?: Config,
+  ) => Streamie<O, NO, Awaited<NR>>;
+
+  // Aggregate the stream to a single value, emitted once when the stream drains: the
+  // accumulator is threaded through every item and the final result is emitted on drain,
+  // including the untouched initialValue when the stream produced no items. The fold is
+  // sequential (concurrency 1). A push receipt resolves with the accumulator after that
+  // item was folded in.
+  reduce: <A>(
+    reducer: (accumulator: A, item: O) => MaybePromise<A>,
+    initialValue: A,
+    config?: Config,
+  ) => Streamie<O, A>;
+
+  // Running reduce: the accumulator is threaded through every item and emitted after each
+  // one (so an N-item stream yields N outputs, the running totals). Like reduce the fold is
+  // sequential (concurrency 1); unlike reduce it emits intermediate results rather than only
+  // the final one, and emits nothing for an empty stream.
+  scan: <A>(
+    reducer: (accumulator: A, item: O) => MaybePromise<A>,
+    initialValue: A,
+    config?: Config,
+  ) => Streamie<O, A>;
+
+  // Appends an explicit terminal stage (an identity .each): a pipeline built of
+  // pure transforms ends with .sink() to declare that reaching the end *is* the
+  // point, letting the chain drain rather than retain its final outputs.
+  sink: (config?: Config) => SinkStreamie<O, O>;
+
   pause: (shouldPause?: boolean) => void;
   drain: () => void;
 
-  // Register input streamies
-  // We woudl be included to say that the 'OQT' of an input streamie should be
-  // the 'IQT' of this streamie, but we would need to know whether or not the
-  // input streamie had been flattened.
-  registerInput: (inputStreamie: Streamie<any, IQT, any>) => void;
-  registerOutput: (outputStreamie: Streamie<OQT, any, any>) => void;
+  // Terminates the streamie abnormally through the halt machinery, optionally with an
+  // arbitrary external error. The error becomes the abortError of the onHalted
+  // payload, rejects the streamie's promise and any queued push receipts, and is
+  // delivered to async iterations as a rejection. Idempotent, and a no-op on a
+  // streamie that has already halted or drained. An abort cascades downstream only
+  // when a consumer's feeders have all aborted, and upstream only when a feeder is
+  // left with no consumers at all (see Config.keepAlive) — so aborting any stage
+  // tears down exactly the parts of the pipeline with nothing left to live for.
+  abort: (error?: unknown) => void;
 
-  // Event handler registration
-  onBackpressureRelease: (eventHandler: () => void) => void;
-  onDrained: (eventHandler: () => void) => void;
-  onDraining: (eventHandler: () => void) => void;
-  onError: (eventHandler: (error: StreamieQueueError<IQT, C>) => void) => void;
-  onHalted: (eventHandler: () => void) => void;
+  registerInput: (inputStreamie: Streamie<any, I, any>) => void;
+  // A sink is a legitimate consumer (it consumes from upstream; what it refuses is
+  // consumers of its own), so SinkStreamie is accepted here.
+  registerOutput: (outputStreamie: Streamie<O, any, any> | SinkStreamie<O, any, any>) => void;
 
-  // This is to allow upstream streamies to propagate errors. Should not be invoked for
-  // another reason. We can't know the type generics because it could have been passed
-  // from a parent of a parent, etc.
-  _pushQueueError: (error: StreamieQueueError<any, any>) => void;
+  // Each call registers a fresh consumer of this streamie's outputs, participating in
+  // backpressure: the source only stays ahead of the iterator's pulls by its own
+  // bounded output queue. Concurrent iterators each observe every item (outputs are
+  // broadcast to all consumers). An iterator attached to a previously consumer-less
+  // streamie receives retained backlog; otherwise it observes only items not yet
+  // delivered to existing consumers.
+  [Symbol.asyncIterator]: () => AsyncIterableIterator<O>;
 
-  // Public state
+  // Lifecycle events. Each is callable to attach a persistent handler and carries
+  // .once for handlers that remove themselves after one invocation; both return an
+  // unsubscribe function. The draining/drained/halted transitions are one-way and
+  // latch: a handler attached after the transition has occurred is invoked
+  // immediately. backpressureRelease and error are recurring.
+  onBackpressureRelease: Subscribe;
+  onDrained: Subscribe;
+  onDraining: Subscribe;
+  onError: Subscribe<StreamieQueueError<I>>;
+  onHalted: Subscribe<StreamieHaltPayload<I>>;
+
+  _pushQueueError: (error: StreamieQueueError<any>) => void;
+  _receive: (...items: I[]) => void;
+  // Appends a single output from outside a handler invocation, used by drain-flush
+  // combinators (reduce). Not part of the public surface — like _receive it injects into
+  // this streamie's queues directly and should not be called for any other reason.
+  _emit: (output: O) => void;
+
   state: {
     backpressure: {
       input: boolean;
@@ -144,6 +395,10 @@ export type Streamie<IQT extends any, OQT extends any, C extends Config> = {
     isPaused: boolean;
     isDrained: boolean;
     isHalted: boolean;
+    isAborted: boolean;
+    // The configured batch size: null when unbatched, the size passed to .batch
+    // otherwise (including 1). Intent, not the internal dequeue count.
+    batchSize: number | null;
     count: {
       handling: number;
       started: number;
@@ -154,6 +409,33 @@ export type Streamie<IQT extends any, OQT extends any, C extends Config> = {
     };
   };
 
-  // Promise which resolves when the streamie is drained.
   promise: Promise<null>;
 };
+
+// The type of a terminal stage (.each / .sink): a Streamie whose outputs are
+// discarded as they settle, so nothing can ever be consumed from it. At runtime,
+// attaching a consumer to a sink throws; this type moves that error to compile time
+// by omitting every consumer-attaching member — the combinators, the async
+// iterator, toArray, and registerOutput. Everything else (push, drain, abort,
+// pause, events, state, promise) remains: a sink is still a live stage, just one
+// with no downstream. Note this is the type of the .each/.sink combinators'
+// returns; a streamie constructed directly with { sink: true } carries it only if
+// you type it as such, since a widened Config can't discriminate the overload.
+export type SinkStreamie<I, O, R = O> = Omit<
+  Streamie<I, O, R>,
+  | 'map'
+  | 'each'
+  | 'filter'
+  | 'batch'
+  | 'flatten'
+  | 'flatMap'
+  | 'produce'
+  | 'reduce'
+  | 'scan'
+  | 'take'
+  | 'until'
+  | 'sink'
+  | 'toArray'
+  | 'registerOutput'
+  | typeof Symbol.asyncIterator
+>;

@@ -12,7 +12,7 @@ describe('Streamie', () => {
     // Test the map function
     test('drain and push', async () => {
       const result: string[] = [];
-      const initialStreamie = streamie<number, string | void, {}>(async (
+      const initialStreamie = streamie(async (
         page: number,
         {
           // self,
@@ -30,7 +30,7 @@ describe('Streamie', () => {
 
       const remainder = initialStreamie
       .filter((letter, { index }) => index % 2 === 0, {})
-      .map((letter) => {
+      .each((letter) => {
         if (letter) result.push(letter);
       }, {});
 

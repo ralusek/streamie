@@ -1,0 +1,41 @@
+{
+  // Compiler options shared by every build and check. The two emitting builds
+  // (tsconfig.json -> ESM, tsconfig.cjs.json -> CJS) and the type-test configs all
+  // extend this; only the module system, output directory, and lib differ between them.
+  "compilerOptions": {
+    // ES2022 is the floor every supported runtime clears — Node >= 18, current
+    // browsers, Deno, and Bun — so the emitted JS uses modern syntax without
+    // downleveling. (Type-only libs are layered on per build; see the lib note below.)
+    "target": "ES2022",
+    // Type-only libs (the emitted JS is governed by target, not this):
+    //   ES2022 — the language level we compile against.
+    //   DOM / DOM.Iterable — the WHATWG stream globals (ReadableStream/WritableStream/
+    //     QueuingStrategy) that the 'streamie/web' entry (src/web.ts) types against.
+    //     Only web.ts and its bridge impls reference them; the core uses none, and its
+    //     lib-agnosticism is proven separately by the ES2022-only type-tests
+    //     (tsconfig.type-tests.json).
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+
+    "strict": true,
+    // The node:stream bridges (the 'streamie/node' entry) and the yieldToMacrotask
+    // fallback type against Node's ambient declarations. Naming it explicitly keeps the
+    // ambient global surface deliberate rather than "every @types package that happens
+    // to be installed". (The core entry references none of these — its independence is
+    // proven by the type-tests, which compile it without the DOM lib.)
+    "types": ["node"],
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    // Each file must be compilable in isolation (no cross-file type elision), which is
+    // both modern hygiene and what lets per-file transpilers (ts-jest, esbuild, swc)
+    // process the source faithfully. The source already uses `import type` throughout,
+    // which is what this enforces.
+    "isolatedModules": true,
+
+    // Emit declarations and the maps that point editors from a .d.ts back to the .ts
+    // source, plus JS source maps for debuggable stack traces into the original code.
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true
+  }
+}

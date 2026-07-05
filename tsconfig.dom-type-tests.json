@@ -1,0 +1,15 @@
+{
+  // The 'streamie/web' entry types against the real WHATWG stream globals, so its type
+  // tests need the DOM lib. The core type tests (tsconfig.type-tests.json) run without
+  // DOM on purpose, to prove the core needs no web-stream type environment; this is the
+  // one config that brings the globals in. Like the core type tests, it runs against the
+  // built declarations in dist/esm.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "noEmit": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"]
+  },
+  "include": ["tests/streams-web.type-test.ts"]
+}
